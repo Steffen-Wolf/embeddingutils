@@ -1,5 +1,4 @@
 from torch.nn.functional import cosine_similarity
-from copy import deepcopy
 import inferno.utils.torch_utils as thu
 import torch
 import numpy as np
