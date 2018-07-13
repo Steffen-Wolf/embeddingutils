@@ -8,7 +8,7 @@ import collections
 from embeddingutils.affinities import embedding_to_affinities, get_offsets, logistic_similarity
 
 
-def mws_segmentation(embedding, offsets='default-3D', affinity_measure=euclidean_similarity,
+def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_similarity(),
                      ATT_C=3, repulsive_strides=None, return_affinities=False):
 
     if offsets == 'default-2D':
