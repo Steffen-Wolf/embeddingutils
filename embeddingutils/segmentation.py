@@ -5,7 +5,7 @@ import constrained_mst as cmst
 import numpy as np
 import hdbscan
 import collections
-from embeddingutils.affinities import embedding_to_affinities, get_offsets, euclidean_similarity
+from embeddingutils.affinities import embedding_to_affinities, get_offsets, logistic_similarity
 
 
 def mws_segmentation(embedding, offsets='default-3D', affinity_measure=euclidean_similarity,
@@ -95,7 +95,7 @@ def hdbscan_segmentation(embedding, n_img_dims=None, coord_scales=None,
 
 
 if __name__ == '__main__':
-    from embeddingutils.affinities import normalized_cosine_similarity, euclidean_similarity
+    from embeddingutils.affinities import normalized_cosine_similarity, logistic_similarity
     import matplotlib.pyplot as plt
     emb = torch.ones((2, 11, 11)).float()
     emb[0] = -1
@@ -116,7 +116,7 @@ if __name__ == '__main__':
     #    print(torch.max(aff), torch.min(aff))
 
     offsets = ((0, 1), (1, 0), (0, 1), (1, 0))
-    segs = (mws_segmentation(emb, offsets=offsets, affinity_measure=euclidean_similarity,
+    segs = (mws_segmentation(emb, offsets=offsets, affinity_measure=logistic_similarity,
                                ATT_C=2, repulsive_strides=(1, 1)))
     for s in segs:
         plt.imshow(s)

@@ -7,7 +7,7 @@ def euclidean_distance(x, y, dim=0):
         return torch.sqrt(((x - y)**2).sum(dim))
 
 
-def euclidean_similarity(x, y, dim=0):
+def logistic_similarity(x, y, dim=0):
     return 2 / (1 + torch.exp(euclidean_distance(x, y, dim=dim)))
 
 
