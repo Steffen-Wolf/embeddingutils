@@ -52,7 +52,7 @@ def get_offsets(offsets):
                                 [-9, -4], [-4, -9], [4, -9], [9, -4],
                                 [-27, 0], [0, -27]], int)
         else:
-            assert False, "Please provide a list off offsets or one of ['default-3D', 'default-2D']"
+            assert False, "Please provide a list of offsets or one of ['default-3D', 'default-2D']"
     return offsets if isinstance(offsets, np.ndarray) else np.array(offsets, int)
 
 

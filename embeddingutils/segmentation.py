@@ -4,6 +4,7 @@ from skimage.measure import label
 import constrained_mst as cmst
 import numpy as np
 import hdbscan
+import collections
 from embeddingutils.affinities import embedding_to_affinities, get_offsets, euclidean_similarity
 
 
@@ -33,7 +34,6 @@ def mws_segmentation(embedding, offsets='default-3D', affinity_measure=euclidean
 
 
     result = []
-    print(affinities.shape)
     for aff in affinities:
         dws = cmst.ConstrainedWatershed(np.array(img_shape),
                                         offsets,
@@ -53,27 +53,42 @@ def mws_segmentation(embedding, offsets='default-3D', affinity_measure=euclidean
         return torch.from_numpy(result)
 
 
-def hdbscan_segmentation(embedding, metric='euclidean', n_img_dims=None, min_cluster_size=50):
+def hdbscan_segmentation(embedding, n_img_dims=None, coord_scales=None,
+                         metric='euclidean', min_cluster_size=50, **hdbscan_kwargs):
     assert metric in hdbscan.dist_metrics.METRIC_MAPPING
     if n_img_dims is None:
+        # default: assume one embedding image is being passed
         n_img_dims = len(embedding.shape) - 1
     emb_shape = embedding.shape
     img_shape = emb_shape[-n_img_dims:]
 
+    # compute #pixels per image
     n_pixels = 1
     for s in img_shape:
         n_pixels *= s
-    print(n_pixels)
-    embedding = embedding.contiguous().view(-1, emb_shape[-n_img_dims-1], n_pixels).permute(0, 2, 1)
-    print(embedding.shape)
 
+    # reshape embedding for clustering
+    embedding = embedding.contiguous().view(-1, emb_shape[-n_img_dims-1], n_pixels).permute(0, 2, 1)
+
+    # append image coordinates as features if requested
+    if coord_scales is not None:
+        if not isinstance(coord_scales, collections.Iterable):
+            coord_scales = n_img_dims * (coord_scales,)
+        assert len(coord_scales) == n_img_dims, f'{coord_scales}, {n_img_dims}'
+        coord_axes = []
+        for i, scale in enumerate(coord_scales):
+            coord_axes.append(np.linspace(0, (img_shape[i]-1) * scale, img_shape[i], dtype=np.float32))
+        coord_mesh = np.stack(np.meshgrid(*coord_axes), axis=-1).reshape(n_pixels, -1)[None].repeat(embedding.shape[0], 0)
+        embedding = torch.cat([torch.from_numpy(coord_mesh).type(embedding.dtype), embedding], dim=-1)
+
+    # init HDBSCAN clusterer
+    clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, metric=metric, **hdbscan_kwargs)
+
+    # iterate over images in batch
     result = []
     for emb in embedding:
-        #np.concatenate([tags[i], xx[None], yy[None]] TODO
-        clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, metric=metric)
         labels = clusterer.fit_predict(emb).reshape(img_shape)
         result.append(labels)
-        print(np.max(labels))
 
     result = np.stack(result, axis=0).reshape(emb_shape[:-n_img_dims - 1] + emb_shape[-n_img_dims:])
     return torch.from_numpy(result)
@@ -90,7 +105,7 @@ if __name__ == '__main__':
     emb[0, 4:, 7:9] = 2
     emb = emb + torch.randn(emb.shape)/5
     emb = emb[:, None]
-    print(emb.shape)
+    print('embedding shape:', emb.shape)
 
     for e in emb:
         plt.imshow(e[0])
@@ -107,7 +122,7 @@ if __name__ == '__main__':
         plt.imshow(s)
         plt.show()
 
-    segs = hdbscan_segmentation(emb, metric='euclidean', min_cluster_size=8, n_img_dims=2)
+    segs = hdbscan_segmentation(emb, metric='euclidean', min_cluster_size=8, n_img_dims=2, coord_scales=(.1, .1))
     for s in segs:
         plt.imshow(s)
         plt.show()
