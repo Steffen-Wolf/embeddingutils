@@ -8,6 +8,12 @@ def label_equal_similarity(x, y, dim=0):
     return ((x == y).squeeze(dim=dim)).float()
 
 
+def ignore_label_mask_similarity(x, y, dim=0, ignore_label=0):
+    # returns a mask that is 0 where x or y is to be ignored
+    assert x.shape[dim] == 1, 'label images should have one channel only'
+    return (torch.stack([x != ignore_label, y != ignore_label], dim=0)).min(dim=0)[0].squeeze(dim=dim).byte()
+
+
 def euclidean_distance(x, y, dim=0):
     return torch.sqrt(((x - y)**2).sum(dim))
 

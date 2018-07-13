@@ -3,7 +3,7 @@ import inferno.utils.torch_utils as thu
 import torch
 import numpy as np
 from embeddingutils.affinities import get_offsets, offset_slice, EmbeddingToAffinities
-from embeddingutils.affinities import logistic_similarity, squared_euclidean_distance, normalized_cosine_similarity, label_equal_similarity
+from embeddingutils.affinities import logistic_similarity, squared_euclidean_distance, normalized_cosine_similarity, label_equal_similarity, ignore_label_mask_similarity
 from inferno.extensions.criteria.set_similarity_measures import SorensenDiceLoss
 
 
@@ -179,9 +179,7 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
             **super_kwargs)
         self.ignore_label = ignore_label
         self.use_cosine_distance = use_cosine_distance
-        assert not self.use_cosine_distance
-        assert self.ignore_label in [
-            None,], 'Ignore label other that 0 not implemented'
+        self.ignore_label = ignore_label
 
         self.seg_to_aff = EmbeddingToAffinities(offsets=offsets,
                                                 affinity_measure=label_equal_similarity,
@@ -189,11 +187,19 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
         self.emb_to_aff = EmbeddingToAffinities(offsets=offsets,
                                                 affinity_measure=self.affinity_measure,
                                                 pass_offset=True)
-
         self.aff_loss = SorensenDiceLoss(channelwise=False)
 
+        if self.ignore_label is not None:
+            self.seg_to_mask = EmbeddingToAffinities(offsets=offsets,
+                                                     affinity_measure=ignore_label_mask_similarity,
+                                                     pass_offset=False)
+        self.relu = torch.nn.ReLU()  # TODO: move this
+
     def affinity_measure(self, x, y, dim, offset):
-        return logistic_similarity(x, y, dim=dim, offset=offset/100)
+        if self.use_cosine_distance:
+            return self.relu(normalized_cosine_similarity(x, y) * 2 - 1)
+        else:
+            return logistic_similarity(x, y, dim=dim, offset=offset/100)
 
     def get_losses(self, preds, labels):
         if torch.is_tensor(labels):
@@ -204,14 +210,10 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
         if len(preds.shape) == len(labels.shape):  # no intermediate predictions
             preds = preds[:, None]
 
-        assert not torch.isnan(preds).any()
-        print(torch.max(preds).item(), torch.min(preds).item())
         gt_aff = self.seg_to_aff(gt_segs)
         pred_aff = self.emb_to_aff(preds)
-
-        assert not torch.isnan(pred_aff).any()
-
-        # FIXME: ignore label
+        if self.ignore_label is not None:
+            masks = self.seg_to_mask(gt_segs)
 
         losses_per_offset = []
         for j, offset in enumerate(self.offsets):  # iterate over offsets
@@ -222,7 +224,8 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
                     loss = self.aff_loss(1 - pred_aff[:, i, j][s], 1 - gt_aff[:, j][s])
                     loss_this_offset.append(loss)
                 else:
-                    assert False
+                    loss = self.aff_loss(1 - pred_aff[:, i, j][masks[:, j]], 1 - gt_aff[:, j][masks[:, j]])
+                    loss_this_offset.append(loss)
             losses_per_offset.append(torch.stack(loss_this_offset, dim=0))\
 
         return losses_per_offset
