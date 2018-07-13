@@ -3,12 +3,25 @@ import torch
 import torch.nn.functional as F
 
 
+def label_equal_similarity(x, y, dim=0):
+    assert x.shape[dim] == 1, 'label images should have one channel only'
+    return ((x == y).squeeze(dim=dim)).float()
+
+
 def euclidean_distance(x, y, dim=0):
-        return torch.sqrt(((x - y)**2).sum(dim))
+    return torch.sqrt(((x - y)**2).sum(dim))
 
 
-def logistic_similarity(x, y, dim=0):
-    return 2 / (1 + torch.exp(euclidean_distance(x, y, dim=dim)))
+def squared_euclidean_distance(x, y, dim=0):
+    return ((x - y) ** 2).sum(dim)
+
+
+def logistic_similarity(x, y, dim=0, offset=None):
+    if offset is None:
+        sig = 1
+    else:
+        sig = np.linalg.norm(offset)
+    return 2 / (1 + (1 / torch.exp(-squared_euclidean_distance(x, y, dim=dim)/(2 * sig**2)).clamp(min=1e-6)))
 
 
 def normalized_cosine_similarity(x, y, dim=0):
@@ -56,7 +69,7 @@ def get_offsets(offsets):
     return offsets if isinstance(offsets, np.ndarray) else np.array(offsets, int)
 
 
-def embedding_to_affinities(emb, offsets='default-3D', affinity_measure=euclidean_distance):
+def embedding_to_affinities(emb, offsets='default-3D', affinity_measure=euclidean_distance, pass_offset=False):
     # if len(emb.shape) = n + 1 + len(offsets[0]):
     # function is parallel over first n dimensions
     # the (n+1)th dimension is assumed to be embedding dimenstion
@@ -71,7 +84,10 @@ def embedding_to_affinities(emb, offsets='default-3D', affinity_measure=euclidea
         if all(abs(o) < s for o, s in zip(off, emb.shape[-len(off):])):
             s1 = offset_slice(off, reverse=True, extra_dims=extra_dims)
             s2 = offset_slice(off, extra_dims=extra_dims)
-            aff = affinity_measure(emb[s1], emb[s2], dim=emb_axis)
+            if not pass_offset:
+                aff = affinity_measure(emb[s1], emb[s2], dim=emb_axis)
+            else:
+                aff = affinity_measure(emb[s1], emb[s2], dim=emb_axis, offset=off)
             aff = F.pad(aff, offset_padding(off))
         else:
             print('warning: offset bigger than image')
@@ -80,6 +96,25 @@ def embedding_to_affinities(emb, offsets='default-3D', affinity_measure=euclidea
 
     return torch.stack(result, dim=emb_axis)
 
+
+class EmbeddingToAffinities(torch.nn.Module):
+    def __init__(self, offsets='default-3D', affinity_measure=logistic_similarity, pass_offset=True):
+        super(EmbeddingToAffinities, self).__init__()
+        self.offsets = get_offsets(offsets)
+        self.affinity_measure = affinity_measure
+        self.pass_offset = pass_offset
+        # TODO: compute offset slices and paddings in constructor
+
+    def forward(self, emb):
+        if self.pass_offset:
+            return embedding_to_affinities(emb,
+                                           offsets=self.offsets,
+                                           affinity_measure=self.affinity_measure,
+                                           pass_offset=self.pass_offset)
+        else:
+            return embedding_to_affinities(emb,
+                                           offsets=self.offsets,
+                                           affinity_measure=self.affinity_measure)
 
 if __name__ == '__main__':
     t = torch.arange(25).view(5, 5)
