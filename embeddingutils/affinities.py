@@ -94,7 +94,7 @@ def embedding_to_affinities(emb, offsets='default-3D', affinity_measure=euclidea
                 aff = affinity_measure(emb[s1], emb[s2], dim=emb_axis)
             else:
                 aff = affinity_measure(emb[s1], emb[s2], dim=emb_axis, offset=off)
-            aff = F.pad(aff, offset_padding(off))
+            aff = F.pad(aff, offset_padding(off), value=1.)
         else:
             print('warning: offset bigger than image')
             aff = torch.zeros(emb.shape[:emb_axis] + emb.shape[emb_axis+1:]).to(emb.device)

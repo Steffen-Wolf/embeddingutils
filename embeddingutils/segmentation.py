@@ -9,7 +9,7 @@ from embeddingutils.affinities import embedding_to_affinities, get_offsets, logi
 
 
 def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_similarity,
-                     ATT_C=3, repulsive_strides=None, return_affinities=False):
+                     ATT_C=3, repulsive_strides=None, percentile=5 ,return_affinities=False):
 
     if offsets == 'default-2D':
         ATT_C = 2
@@ -29,8 +29,13 @@ def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_
 
     affinities = embedding_to_affinities(embedding, offsets=offsets, affinity_measure=affinity_measure)
     affinities = affinities.contiguous().view((-1, len(offsets)) + emb_shape[-n_img_dims:])
-    affinities[:, :ATT_C] *= -1
-    affinities[:, :ATT_C] += 1.
+
+    if percentile is not None:
+        affinities -= np.percentile(affinities, percentile)
+        affinities[:, :ATT_C] *= -1
+    else:
+        affinities[:, :ATT_C] *= -1
+        affinities[:, :ATT_C] += 1
 
 
     result = []
@@ -48,7 +53,7 @@ def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_
     result = np.stack(result, axis=-(n_img_dims+1)).reshape(emb_shape[:-n_img_dims-1] + emb_shape[-n_img_dims:])
 
     if return_affinities:
-        return torch.from_numpy(result), torch.from_numpy(affinities)
+        return torch.from_numpy(result), affinities
     else:
         return torch.from_numpy(result)
 
