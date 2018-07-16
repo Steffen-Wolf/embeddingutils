@@ -78,7 +78,7 @@ class UNetSkeleton(EncoderDecoderSkeleton):
                 self.fmaps = [fmaps + i * self.fmap_increase for i in range(self.depth+1)]
             elif 'fmap_factor' in kwargs:
                 self.fmap_factor = kwargs['fmap_factor']
-                self.fmaps = [fmaps * i**self.fmap_factor for i in range(self.depth + 1)]
+                self.fmaps = [fmaps * self.fmap_factor**i for i in range(self.depth+1)]
             else:
                 self.fmaps = [fmaps, ] * (self.depth + 1)
         assert len(self.fmaps) == self.depth + 1
@@ -160,7 +160,7 @@ class UNet3D(UNetSkeleton):
             divisibility_constraint *= np.array(scale_factor)
         self.divisibility_constraint = list(divisibility_constraint.astype(int))
 
-        self.setup_graph()  # TODO: this is sooo ugly. do it when forward() is called for the first time?
+        self.setup_graph()  # TODO: this is ugly. do it when forward() is called for the first time?
 
     def construct_conv(self, f_in, f_out):
         return self.conv_type(f_in, f_out, kernel_size=3)
