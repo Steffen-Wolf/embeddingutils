@@ -122,6 +122,7 @@ class EmbeddingToAffinities(torch.nn.Module):
                                            offsets=self.offsets,
                                            affinity_measure=self.affinity_measure)
 
+
 if __name__ == '__main__':
     t = torch.arange(25).view(5, 5)
     print(t)

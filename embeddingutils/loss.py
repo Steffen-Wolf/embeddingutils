@@ -166,7 +166,7 @@ class LossSegmentwiseFreeTags(WeightedLoss):  # TODO: requires_grad = False on c
 
 class LossAffinitiesFromEmbedding(WeightedLoss):
     def __init__(self, offsets='default-3D', loss_weights=None, ignore_label=None,
-                 use_cosine_distance=False, **super_kwargs):
+                 use_cosine_distance=False, affinities_direct=False, **super_kwargs):
         self.offsets = get_offsets(offsets)
         if loss_weights is None:
             loss_weights = (1,) * len(self.offsets)
@@ -193,13 +193,15 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
             self.seg_to_mask = EmbeddingToAffinities(offsets=offsets,
                                                      affinity_measure=ignore_label_mask_similarity,
                                                      pass_offset=False)
+
+        self.affinities_direct = affinities_direct
         self.relu = torch.nn.ReLU()  # TODO: move this
 
     def affinity_measure(self, x, y, dim, offset):
         if self.use_cosine_distance:
-            return self.relu(normalized_cosine_similarity(x, y) * 2 - 1)
+            return self.relu(normalized_cosine_similarity(x, y, dim=dim) * 2 - 1)
         else:
-            return logistic_similarity(x, y, dim=dim, offset=offset/100)
+            return logistic_similarity(x, y, dim=dim, offset=np.array(0.01, float))#offset/100)
 
     def get_losses(self, preds, labels):
         if torch.is_tensor(labels):
@@ -211,7 +213,10 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
             preds = preds[:, None]
 
         gt_aff = self.seg_to_aff(gt_segs)
-        pred_aff = self.emb_to_aff(preds)
+        if not self.affinities_direct:
+            pred_aff = self.emb_to_aff(preds)
+        else:
+            pred_aff = preds
         if self.ignore_label is not None:
             masks = self.seg_to_mask(gt_segs)
 

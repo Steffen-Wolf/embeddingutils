@@ -9,7 +9,7 @@ from embeddingutils.affinities import embedding_to_affinities, get_offsets, logi
 
 
 def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_similarity,
-                     ATT_C=3, repulsive_strides=None, percentile=5 ,return_affinities=False):
+                     ATT_C=3, repulsive_strides=None, percentile=5, return_affinities=False):
 
     if offsets == 'default-2D':
         ATT_C = 2
