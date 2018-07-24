@@ -8,12 +8,13 @@ import collections
 from embeddingutils.affinities import embedding_to_affinities, get_offsets, logistic_similarity
 
 
-def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_similarity,
-                     ATT_C=3, repulsive_strides=None, percentile=5, return_affinities=False):
+def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_similarity, pass_offset=False,
+                     ATT_C=None, repulsive_strides=None, percentile=5, return_affinities=False,
+                     attraction_factor=1):
 
-    if offsets == 'default-2D':
-        ATT_C = 2
     offsets = get_offsets(offsets)
+    if ATT_C is None:
+        ATT_C = len(offsets[0])
 
     emb_shape = embedding.shape
     img_shape = embedding.shape[-len(offsets[0]):]
@@ -26,8 +27,11 @@ def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_
     #for off in offsets:
     #    assert all(abs(o) < s for o, s in zip(off, emb.shape[-len(off):])), \
     #        f'offset {off} is to big for image of shape {img_shape}'
-
-    affinities = embedding_to_affinities(embedding, offsets=offsets, affinity_measure=affinity_measure)
+    if affinity_measure is not None:
+        affinities = embedding_to_affinities(embedding, offsets=offsets, affinity_measure=affinity_measure,
+                                             pass_offset=pass_offset)
+    else:
+        affinities = embedding
     affinities = affinities.contiguous().view((-1, len(offsets)) + emb_shape[-n_img_dims:])
 
     if percentile is not None:
@@ -36,6 +40,7 @@ def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_
     else:
         affinities[:, :ATT_C] *= -1
         affinities[:, :ATT_C] += 1
+    affinities[:, :ATT_C] *= attraction_factor
 
 
     result = []

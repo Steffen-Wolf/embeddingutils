@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
+from scipy.ndimage.morphology import distance_transform_edt
 
 
 def label_equal_similarity(x, y, dim=0):
@@ -24,14 +25,18 @@ def squared_euclidean_distance(x, y, dim=0):
 
 def logistic_similarity(x, y, dim=0, offset=None):
     if offset is None:
-        sig = 1
+        sig = 0.1
     else:
         sig = np.linalg.norm(offset)
-    return 2 / (1 + (1 / torch.exp(-squared_euclidean_distance(x, y, dim=dim)/(2 * sig**2)).clamp(min=1e-6)))
+    return 2 / (1 + (1 / torch.exp(-squared_euclidean_distance(x, y, dim=dim)/(2 * sig**2)).clamp(min=1e-10)))
 
 
 def normalized_cosine_similarity(x, y, dim=0):
     return 0.5 * (1 + F.cosine_similarity(x, y, dim=dim))
+
+
+def normalized_cosine_similarity_margin1(x, y, dim=0):
+    return F.relu(normalized_cosine_similarity(x, y, dim=dim) * 2 - 1)
 
 
 def offset_slice(offset, reverse=False, extra_dims=0):
@@ -61,8 +66,14 @@ def get_offsets(offsets):
         if offsets == 'default-3D':
             offsets = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, -1],
                                 [0, -9, 0], [0, 0, -9], [0, -9, -9], [0, 9, -9],
-                                [0, -9, 4], [0, -4, -9], [0, 4, -9], [0, 9, -4],
+                                [0, -9, -4], [0, -4, -9], [0, 4, -9], [0, 9, -4],
                                 [-1, -1, 0], [-1, 0, -1],
+                                [0, -27, 0], [0, 0, -27]], int)
+        elif offsets == 'long-3D':
+            offsets = np.array([[-1, 0, 0],
+                                [0, -9, 0], [0, 0, -9], [0, -9, -9], [0, 9, -9],
+                                [0, -9, 4], [0, -4, -9], [0, 4, -9], [0, 9, -4],
+                                [-1, -9, 0], [-1, 0, -9],  # this is changed, too!
                                 [0, -27, 0], [0, 0, -27]], int)
         elif offsets == 'default-2D':
             offsets = np.array([[-1, 0], [0, -1],
@@ -71,7 +82,7 @@ def get_offsets(offsets):
                                 [-9, -4], [-4, -9], [4, -9], [9, -4],
                                 [-27, 0], [0, -27]], int)
         else:
-            assert False, "Please provide a list of offsets or one of ['default-3D', 'default-2D']"
+            assert False, "Please provide a list of offsets or one of ['default-3D', 'long-3D', 'default-2D']"
     return offsets if isinstance(offsets, np.ndarray) else np.array(offsets, int)
 
 
@@ -121,6 +132,21 @@ class EmbeddingToAffinities(torch.nn.Module):
             return embedding_to_affinities(emb,
                                            offsets=self.offsets,
                                            affinity_measure=self.affinity_measure)
+
+
+def seg_to_borders(seg, dim=2, thickness=1):
+    offsets = np.concatenate([np.eye(dim), -np.eye(dim)], axis=0)
+    offsets = np.concatenate([offsets * i for i in range(1, thickness + 1)])
+    shape = seg.shape
+    seg = seg.reshape((-1,) + shape[-dim:])
+    result = []
+    for s in seg:
+        result.append(1 - embedding_to_affinities(
+            s.unsqueeze(-dim-1),
+            offsets=offsets,
+            affinity_measure=label_equal_similarity
+        ).min(-dim-1, keepdim=True)[0].squeeze(-dim-1))
+    return torch.stack(result).contiguous().view(shape)
 
 
 if __name__ == '__main__':

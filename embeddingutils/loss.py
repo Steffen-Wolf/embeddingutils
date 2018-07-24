@@ -2,24 +2,25 @@ from torch.nn.functional import cosine_similarity
 import inferno.utils.torch_utils as thu
 import torch
 import numpy as np
-from embeddingutils.affinities import get_offsets, offset_slice, EmbeddingToAffinities
-from embeddingutils.affinities import logistic_similarity, squared_euclidean_distance, normalized_cosine_similarity, label_equal_similarity, ignore_label_mask_similarity
+from embeddingutils.affinities import *
 from inferno.extensions.criteria.set_similarity_measures import SorensenDiceLoss
-
+import collections
 
 class WeightedLoss(torch.nn.Module):
 
-    def __init__(self, loss_weights, trainer=None, loss_names=None,
+    def __init__(self, loss_weights=None, trainer=None, loss_names=None,
                  split_by_stages=False, enable_logging=True):
         super(WeightedLoss, self).__init__()
         self.loss_weights = loss_weights
-        self.trainer = trainer
-        if loss_names is None:
+        self.enable_logging = enable_logging
+        if isinstance(loss_weights, collections.Sized) and not isinstance(loss_weights, str):
+            self.n_losses = len(loss_weights)
+            self.enable_logging = False
+        if loss_names is None and loss_weights is not None:
             loss_names = [str(i) for i in range(len(loss_weights))]
         self.loss_names = loss_names
-        self.n_losses = len(loss_weights)
         self.logging_enabled = False
-        self.enable_logging = enable_logging
+        self.trainer = trainer
         assert not split_by_stages
         self.split_by_stages = split_by_stages
 
@@ -27,7 +28,13 @@ class WeightedLoss(torch.nn.Module):
         losses = self.get_losses(preds, labels)
         loss = 0
         for i, current in enumerate(losses):
-            loss = loss + self.loss_weights[i] * current
+            if self.loss_weights is None:
+                weight = 1
+            else:
+                weight = self.loss_weights[i]
+            loss = loss + weight * current
+        if self.loss_weights == 'average':
+            losses /= len(losses)
         self.save_losses(losses)
         return loss.mean()
 
@@ -68,6 +75,19 @@ class WeightedLoss(torch.nn.Module):
         # mydict = dict(self.__dict__)
         # mydict['trainer'] = None
         return {}
+
+
+class SumLoss(WeightedLoss):
+    def __init__(self, losses, **super_kwargs):
+        assert isinstance(losses, collections.Iterable)
+        self.losses = losses
+        super(SumLoss, self).__init__(**super_kwargs)
+
+    def get_losses(self, preds, labels):
+        result = []
+        for loss in self.losses:
+            result.append(loss(preds, labels))
+        return result
 
 
 class LossSegmentwiseFreeTags(WeightedLoss):  # TODO: requires_grad = False on centroids
@@ -165,45 +185,99 @@ class LossSegmentwiseFreeTags(WeightedLoss):  # TODO: requires_grad = False on c
 
 
 class LossAffinitiesFromEmbedding(WeightedLoss):
-    def __init__(self, offsets='default-3D', loss_weights=None, ignore_label=None,
-                 use_cosine_distance=False, affinities_direct=False, **super_kwargs):
-        self.offsets = get_offsets(offsets)
-        if loss_weights is None:
-            loss_weights = (1,) * len(self.offsets)
-        assert len(loss_weights) == len(self.offsets)
-        loss_names = ["offset_" + '|'.join(str(o) for o in off) for off in self.offsets]
-        print(loss_names)
+    def __init__(self, offsets='default-3D', loss_weights=None, ignore_label=None, margin=0,
+                 use_cosine_distance=False, pull_weight=0, push_weight=0, affinity_weight=1,
+                 affinities_direct=False, **super_kwargs):
+        if callable(offsets):
+            self.offset_sampler = offsets
+            self.dynamic_offsets = True
+            offsets = self.offset_sampler()
+            loss_names = None
+            loss_weights = 'average'
+        else:
+            self.offsets = get_offsets(offsets)
+            self.dynamic_offsets = False
+            if loss_weights is None:
+                loss_weights = (1/len(self.offsets),) * len(self.offsets)
+            assert len(loss_weights) == len(self.offsets)
+            loss_names = ["offset_" + '_'.join(str(o) for o in off) for off in self.offsets]
+            print(loss_names)
+
         super(LossAffinitiesFromEmbedding, self).__init__(
             loss_weights=loss_weights,
             loss_names=loss_names,
+            enable_logging=not self.dynamic_offsets,
             **super_kwargs)
         self.ignore_label = ignore_label
         self.use_cosine_distance = use_cosine_distance
         self.ignore_label = ignore_label
+        self.margin = margin
+        self.push_weight = push_weight
+        self.pull_weight = pull_weight
+        self.affinity_weight = affinity_weight
 
+        # initialize distance/affinity generating functions
         self.seg_to_aff = EmbeddingToAffinities(offsets=offsets,
                                                 affinity_measure=label_equal_similarity,
                                                 pass_offset=False)
-        self.emb_to_aff = EmbeddingToAffinities(offsets=offsets,
-                                                affinity_measure=self.affinity_measure,
-                                                pass_offset=True)
-        self.aff_loss = SorensenDiceLoss(channelwise=False)
+
+        if self.affinity_weight is not 0:
+            self.emb_to_aff = EmbeddingToAffinities(offsets=offsets,
+                                                    affinity_measure=self.affinity_measure,
+                                                    pass_offset=True)
+            self.aff_loss = SorensenDiceLoss(channelwise=False)
 
         if self.ignore_label is not None:
             self.seg_to_mask = EmbeddingToAffinities(offsets=offsets,
                                                      affinity_measure=ignore_label_mask_similarity,
                                                      pass_offset=False)
 
+        if self.push_weight != 0 or self.pull_weight != 0:
+            self.emb_to_dist = EmbeddingToAffinities(offsets=offsets,
+                                                     affinity_measure=self.distance_measure,
+                                                     pass_offset=False)
+
         self.affinities_direct = affinities_direct
-        self.relu = torch.nn.ReLU()  # TODO: move this
+        if affinities_direct:
+            assert self.pull_weight == self.push_weight == 0 and self.affinity_weight != 0
+        self.relu = torch.nn.ReLU()
+
+    def set_offsets(self, offsets):
+        self.offsets = offsets
+        if self.affinity_weight != 0:
+            self.seg_to_aff.offsets = offsets
+            self.emb_to_aff.offsets = offsets
+        if self.pull_weight != 0 or self.push_weight != 0:
+            self.emb_to_dist.offsets = offsets
+        if self.ignore_label is not None:
+            self.seg_to_mask.offsets = offsets
+
+    def push_loss(self, dists):
+        return (self.relu(self.margin - dists)**2).mean()
+
+    def pull_loss(self, dists):
+        return (dists**2).mean()
 
     def affinity_measure(self, x, y, dim, offset):
         if self.use_cosine_distance:
             return self.relu(normalized_cosine_similarity(x, y, dim=dim) * 2 - 1)
         else:
-            return logistic_similarity(x, y, dim=dim, offset=np.array(0.01, float))#offset/100)
+            return logistic_similarity(x, y, dim=dim)  # =offset/100)#
+
+    def distance_measure(self, x, y, dim):
+        if self.use_cosine_distance:
+            return normalized_cosine_similarity(x, y)
+        else:
+            return euclidean_distance(x, y, dim)
 
     def get_losses(self, preds, labels):
+        # check if random offsets are used and if yes, sample them
+        if self.dynamic_offsets:
+            offsets = self.offset_sampler()
+            self.set_offsets(offsets)
+        else:
+            offsets = self.offsets
+
         if torch.is_tensor(labels):
             gt_segs = labels
         else:
@@ -213,24 +287,44 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
             preds = preds[:, None]
 
         gt_aff = self.seg_to_aff(gt_segs)
-        if not self.affinities_direct:
-            pred_aff = self.emb_to_aff(preds)
-        else:
-            pred_aff = preds
+        if self.affinity_weight != 0:
+            if not self.affinities_direct:
+                pred_aff = self.emb_to_aff(preds)
+            else:
+                pred_aff = preds
+
+        if self.push_weight != 0 or self.pull_weight != 0:
+            pred_dist = self.emb_to_dist(preds)
+
         if self.ignore_label is not None:
             masks = self.seg_to_mask(gt_segs)
+        else:
+            masks = torch.ones_like(gt_segs).byte()
 
         losses_per_offset = []
-        for j, offset in enumerate(self.offsets):  # iterate over offsets
+        for j, offset in enumerate(offsets):  # iterate over offsets
             loss_this_offset = []
             for i in range(pred_aff.shape[1]):  # iterate over intermediate outputs
-                if self.ignore_label is None:
-                    s = offset_slice(offset, reverse=True, extra_dims=1)
-                    loss = self.aff_loss(1 - pred_aff[:, i, j][s], 1 - gt_aff[:, j][s])
-                    loss_this_offset.append(loss)
-                else:
-                    loss = self.aff_loss(1 - pred_aff[:, i, j][masks[:, j]], 1 - gt_aff[:, j][masks[:, j]])
-                    loss_this_offset.append(loss)
-            losses_per_offset.append(torch.stack(loss_this_offset, dim=0))\
+                current_loss = torch.tensor(0).float().to(preds.device)
+                if self.affinity_weight != 0:
+                    ind = masks[:, j]
+                    if ind.any():
+                        m = ind.float().mean()
+                        current_loss += -(1-m) + m * self.affinity_weight * \
+                                        self.aff_loss(1 - pred_aff[:, i, j][ind], 1 - gt_aff[:, j][ind])
+                if self.push_weight != 0:
+                    ind = masks[:, j] * gt_aff[:, j] != 0
+                    if ind.any():
+                        m = ind.float().mean()
+                        current_loss += m * self.push_weight * \
+                                        self.push_loss(pred_dist[:, i, j][ind])
+                if self.pull_weight != 0:
+                    ind = masks[:, j] * (1 - gt_aff[:, j]) != 0
+                    if ind.any():
+                        m = ind.float().mean()
+                        current_loss += m * self.pull_weight * \
+                                        self.pull_loss(pred_dist[:, i, j][ind])
+                loss_this_offset.append(current_loss)
+            losses_per_offset.append(torch.stack(loss_this_offset, dim=0))
 
         return losses_per_offset

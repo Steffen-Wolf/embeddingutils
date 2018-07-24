@@ -4,6 +4,8 @@ from inferno.extensions.layers.convolutional import ConvELU3D, Conv3D, BNReLUCon
 from inferno.extensions.layers.sampling import AnisotropicPool, AnisotropicUpsample
 from inferno.extensions.layers.reshape import Concatenate, Sum
 
+from embeddingutils.models.submodules import SuperhumanSNEMIBlock
+
 import torch
 import torch.nn as nn
 
@@ -162,8 +164,14 @@ class UNet3D(UNetSkeleton):
 
         self.setup_graph()  # TODO: this is ugly. do it when forward() is called for the first time?
 
-    def construct_conv(self, f_in, f_out):
-        return self.conv_type(f_in, f_out, kernel_size=3)
+    def construct_conv(self, f_in, f_out, kernel_size=3):
+        return self.conv_type(f_in, f_out, kernel_size=kernel_size)
+
+    def construct_output_module(self):
+        if self.final_activation is not None:
+            return self.final_activation
+        else:
+            return Identity()
 
     def construct_downsampling_module(self, depth):
         scale_factor = self.scale_factors[depth]
@@ -181,30 +189,79 @@ class UNet3D(UNetSkeleton):
             sampler = nn.Upsample(scale_factor=scale_factor[0])
         return sampler
 
-    def construct_output_module(self):
-        if self.final_activation is not None:
-            return self.final_activation
-        else:
-            return Identity()
-
     def forward(self, input_):
         assert all(input_.shape[-i] % self.divisibility_constraint[-i] == 0 for i in range(1, 4)), \
             f'Volume dimensions {input_.shape[-3:]} are not divisible by {self.divisibility_constraint}'
         return super(UNet3D, self).forward(input_)
 
 
+class SuperhumanSNEMINet(UNet3D):
+    # see https://arxiv.org/pdf/1706.00120.pdf
+    def __init__(self,
+                 in_channels=1, out_channels=1,
+                 fmaps=(28, 36, 48, 64, 80),
+                 conv_type=ConvELU3D,
+                 scale_factor=(
+                         (1, 2, 2),
+                         (1, 2, 2),
+                         (1, 2, 2),
+                         (1, 2, 2)
+                 ),
+                 depth=None,
+                 **kwargs):
+        if depth is None:
+            depth = len(fmaps) - 1
+        super(SuperhumanSNEMINet, self).__init__(
+            conv_type=conv_type,
+            depth=depth,
+            fmaps=fmaps,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            scale_factor=scale_factor,
+            **kwargs
+        )
+
+    def construct_merge_module(self, depth):
+        return Sum()
+
+    def construct_encoder_module(self, depth):
+        f_in = self.fmaps[depth-1] if depth != 0 else self.in_channels
+        f_out = self.fmaps[depth]
+        if depth != 0:
+            return SuperhumanSNEMIBlock(f_in=f_in, f_out=f_out, conv_type=self.conv_type)
+        if depth == 0:
+            return SuperhumanSNEMIBlock(f_in=f_in, f_out=f_out, conv_type=self.conv_type,
+                                        pre_kernel_size=(1, 5, 5), inner_kernel_size=(1, 3, 3))
+
+    def construct_decoder_module(self, depth):
+        f_in = self.fmaps[depth]
+        f_out = self.fmaps[0] if depth == 0 else self.fmaps[depth - 1]
+        if depth != 0:
+            return SuperhumanSNEMIBlock(f_in=f_in, f_out=f_out, conv_type=self.conv_type)
+        if depth == 0:
+            return nn.Sequential(
+                SuperhumanSNEMIBlock(f_in=f_in, f_out=f_out, conv_type=self.conv_type,
+                                     pre_kernel_size=(3, 3, 3), inner_kernel_size=(1, 3, 3)),
+                self.conv_type(f_out, self.out_channels, kernel_size=(1, 5, 5))
+            )
+
+    def construct_base_module(self):
+        f_in = self.fmaps[self.depth-1]
+        f_intermediate = self.fmaps[self.depth]
+        f_out = self.fmaps[self.depth-1]
+        return SuperhumanSNEMIBlock(f_in=f_in, f_main=f_intermediate, f_out=f_out, conv_type=self.conv_type)
+
+
 if __name__ == '__main__':
-    model = UNet3D(depth=3,
-                   in_channels=1,
-                   out_channels=2,
-                   fmaps=5,
-                   fmap_increase=1,
-                   scale_factor=[[1, 3, 3], 2, 2],
-                   final_activation=nn.Sigmoid())
+    model = SuperhumanSNEMINet(
+        in_channels=1,
+        out_channels=2,
+        final_activation=nn.Sigmoid()
+    )
 
     print(model)
     model = model.cuda()
-    inp = torch.ones(model.divisibility_constraint)[None, None].cuda()
+    inp = torch.ones(tuple((np.array(model.divisibility_constraint)*2)))[None, None].cuda()
     out = model(inp)
     print(inp.shape)
     print(out.shape)
