@@ -1,10 +1,12 @@
 from inferno.extensions.containers.graph import Graph, Identity
 
 from inferno.extensions.layers.convolutional import ConvELU3D, Conv3D, BNReLUConv3D
+from inferno.extensions.layers.convolutional import ConvELU2D, Conv2D, BNReLUConv2D
 from inferno.extensions.layers.sampling import AnisotropicPool, AnisotropicUpsample
 from inferno.extensions.layers.reshape import Concatenate, Sum
 
-from embeddingutils.models.submodules import SuperhumanSNEMIBlock
+from embeddingutils.models.submodules import SuperhumanSNEMIBlock, ConvGRU
+
 
 import torch
 import torch.nn as nn
@@ -65,7 +67,7 @@ class EncoderDecoderSkeleton(Graph):
 
 
 class UNetSkeleton(EncoderDecoderSkeleton):
-    def __init__(self, depth, in_channels, out_channels, fmaps=None, **kwargs):
+    def __init__(self, depth, in_channels, out_channels, fmaps, **kwargs):
         super(UNetSkeleton, self).__init__(depth)
         self.depth = depth
         self.in_channels = in_channels
@@ -85,7 +87,7 @@ class UNetSkeleton(EncoderDecoderSkeleton):
                 self.fmaps = [fmaps, ] * (self.depth + 1)
         assert len(self.fmaps) == self.depth + 1
 
-        self.merged_fmaps = [2*n for n in self.fmaps]
+        self.merged_fmaps = [2 * n for n in self.fmaps]
 
     def construct_conv(self, f_in, f_out):
         pass
@@ -121,7 +123,9 @@ class UNetSkeleton(EncoderDecoderSkeleton):
 
 
 CONV_TYPES = {'vanilla': ConvELU3D,
-              'conv_bn': BNReLUConv3D}
+              'conv_bn': BNReLUConv3D,
+              'vanilla2D': ConvELU2D,
+              'conv_bn2D': BNReLUConv2D}
 
 
 class UNet3D(UNetSkeleton):
@@ -134,7 +138,6 @@ class UNet3D(UNetSkeleton):
         super(UNet3D, self).__init__(*super_args, **super_kwargs)
 
         self.final_activation = final_activation
-
         # parse conv_type
         if isinstance(conv_type, str):
             assert conv_type in CONV_TYPES
@@ -151,13 +154,13 @@ class UNet3D(UNetSkeleton):
         for scale_factor in scale_factors:
             assert isinstance(scale_factor, (int, list, tuple))
             if isinstance(scale_factor, int):
-                scale_factor = 3 * [scale_factor, ]
-            assert len(scale_factor) == 3
+                scale_factor = self.dim * [scale_factor, ]
+            assert len(scale_factor) == self.dim
             normalized_factors.append(scale_factor)
         self.scale_factors = normalized_factors
 
         # compute input size divisibiliy constraints
-        divisibility_constraint = np.ones(3)
+        divisibility_constraint = np.ones(len(self.scale_factors[0]))
         for scale_factor in self.scale_factors:
             divisibility_constraint *= np.array(scale_factor)
         self.divisibility_constraint = list(divisibility_constraint.astype(int))
@@ -172,6 +175,10 @@ class UNet3D(UNetSkeleton):
             return self.final_activation
         else:
             return Identity()
+
+    @property
+    def dim(self):
+        return 3
 
     def construct_downsampling_module(self, depth):
         scale_factor = self.scale_factors[depth]
@@ -190,8 +197,9 @@ class UNet3D(UNetSkeleton):
         return sampler
 
     def forward(self, input_):
-        assert all(input_.shape[-i] % self.divisibility_constraint[-i] == 0 for i in range(1, 4)), \
-            f'Volume dimensions {input_.shape[-3:]} are not divisible by {self.divisibility_constraint}'
+        # input_dim = len(input_.shape)
+        # assert all(input_.shape[-i] % self.divisibility_constraint[-i] == 0 for i in range(1, input_dim-1)), \
+            # f'Volume dimensions {input_.shape[2:]} are not divisible by {self.divisibility_constraint}'
         return super(UNet3D, self).forward(input_)
 
 
@@ -250,6 +258,74 @@ class SuperhumanSNEMINet(UNet3D):
         f_intermediate = self.fmaps[self.depth]
         f_out = self.fmaps[self.depth-1]
         return SuperhumanSNEMIBlock(f_in=f_in, f_main=f_intermediate, f_out=f_out, conv_type=self.conv_type)
+
+
+class UNet2D(UNet3D):
+    def __init__(self,
+                 scale_factor=2,
+                 conv_type='vanilla2D',
+                 final_activation=None,
+                 *super_args, **super_kwargs):
+        self.dim = 2
+        super(UNet2D, self).__init__(*super_args, **super_kwargs)
+
+    @property
+    def dim(self):
+        return 2
+
+    def construct_downsampling_module(self, depth):
+        scale_factor = self.scale_factors[depth]
+        sampler = nn.MaxPool2d(kernel_size=scale_factor,
+                               stride=scale_factor,
+                               padding=0)
+        return sampler
+
+
+class RecurrentUNet2D(UNet2D):
+    def __init__(self,
+                 scale_factor=2,
+                 conv_type='vanilla2D',
+                 final_activation=None,
+                 rec_n_layers=3,
+                 rec_kernel_sizes=(3, 5, 3),
+                 rec_hidden_size=(16, 32, 8),
+                 *super_args, **super_kwargs):
+        self.rec_n_layers = rec_n_layers
+        self.rec_kernel_sizes = rec_kernel_sizes
+        self.rec_hidden_size = rec_hidden_size
+        self.rec_layers = []
+
+        super(UNet2D, self).__init__(scale_factor=scale_factor,
+                                     conv_type=conv_type,
+                                     final_activation=final_activation,
+                                     *super_args, **super_kwargs)
+
+    def construct_skip_module(self, depth):
+        self.rec_layers.append(ConvGRU(input_size=self.fmaps[depth],
+                                       hidden_size=self.fmaps[depth],
+                                       kernel_sizes=self.rec_kernel_sizes,
+                                       n_layers=self.rec_n_layers,
+                                       conv_type=self.conv_type))
+
+        return self.rec_layers[-1]
+
+    def set_sequence_length(self, sequence_length):
+        for r in self.rec_layers:
+            r.sequence_length = sequence_length
+
+    def forward(self, input_):
+        sequence_length = input_.shape[2]
+        batch_size = input_.shape[0]
+        flat_shape = [batch_size * sequence_length] + [input_.shape[1]] + list(input_.shape[3:])
+        flat_output_shape = [batch_size, sequence_length] + [self.out_channels] + list(input_.shape[3:])
+
+        transpose_input = input_.permute((0, 2, 1, 3, 4))\
+                                .contiguous()\
+                                .view(*flat_shape).detach()
+
+        self.set_sequence_length(sequence_length)
+        output = super(UNet2D, self).forward(transpose_input)
+        return output.view(*flat_output_shape).permute((0, 2, 1, 3, 4))
 
 
 if __name__ == '__main__':
