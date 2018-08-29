@@ -4,24 +4,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def make_separable(conv_type):
-
-    class SeparableConv(nn.Module):
-        def __init__(self, in_channels, out_channels, **kwargs):
-            #TODO handle channels
-            kernel_size = kwargs.pop('kernel_size')
-            super(SeparableConv, self).__init__()
-            self.depthwise = conv_type(in_channels, in_channels, kernel_size=kernel_size, depthwise=True)
-            self.pointwise = conv_type(in_channels, out_channels, kernel_size=1, **kwargs)
-
-        def forward(self, x):
-            x = self.depthwise(x)
-            x = self.pointwise(x)
-            return x
-
-    return SeparableConv
-
-
 class DepthToChannel(nn.Module):
     def forward(self, input_):
         assert len(input_.shape) == 5, \
@@ -52,7 +34,6 @@ class ResBlock(nn.Module):
         x = x + self.inner(x)
         if self.post is not None:
             x = self.post(x)
-        print(x.shape)
         return x
 
 

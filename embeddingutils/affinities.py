@@ -75,6 +75,10 @@ def get_offsets(offsets):
                                 [0, -9, 4], [0, -4, -9], [0, 4, -9], [0, 9, -4],
                                 [-1, -9, 0], [-1, 0, -9],  # this is changed, too!
                                 [0, -27, 0], [0, 0, -27]], int)
+        elif offsets == 'minimal-3D':
+            offsets = np.array([[-1, 0, 0], [0, -1, 0],
+                                [0, -9, 0],
+                                [0, -27, 0]], int)
         elif offsets == 'default-2D':
             offsets = np.array([[-1, 0], [0, -1],
                                 [-9, 0], [0, -9],
@@ -82,7 +86,8 @@ def get_offsets(offsets):
                                 [-9, -4], [-4, -9], [4, -9], [9, -4],
                                 [-27, 0], [0, -27]], int)
         else:
-            assert False, "Please provide a list of offsets or one of ['default-3D', 'long-3D', 'default-2D']"
+            assert False, "Please provide a list of offsets or one of " \
+                          "['default-3D', 'long-3D', 'minimal-3D', 'default-2D']"
     return offsets if isinstance(offsets, np.ndarray) else np.array(offsets, int)
 
 
@@ -91,6 +96,8 @@ def embedding_to_affinities(emb, offsets='default-3D', affinity_measure=euclidea
     # function is parallel over first n dimensions
     # the (n+1)th dimension is assumed to be embedding dimenstion
     # rest are going to be shifted by offsets
+    if affinity_measure is None:
+        return emb
 
     offsets = get_offsets(offsets)
 
