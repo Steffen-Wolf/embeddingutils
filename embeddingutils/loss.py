@@ -15,7 +15,7 @@ class WeightedLoss(torch.nn.Module):
         self.enable_logging = enable_logging
         if isinstance(loss_weights, collections.Sized) and not isinstance(loss_weights, str):
             self.n_losses = len(loss_weights)
-            self.enable_logging = False
+            self.enable_logging = True
         if loss_names is None and loss_weights is not None:
             loss_names = [str(i) for i in range(len(loss_weights))]
         self.loss_names = loss_names
@@ -28,13 +28,14 @@ class WeightedLoss(torch.nn.Module):
         losses = self.get_losses(preds, labels)
         loss = 0
         for i, current in enumerate(losses):
-            if self.loss_weights is None:
-                weight = 1
-            else:
+            if self.loss_weights is not None and not isinstance(self.loss_weights, str):
                 weight = self.loss_weights[i]
+            elif self.loss_weights == 'average':
+                weight = 1/len(losses)
+            else:
+                weight = 1
             loss = loss + weight * current
-        if self.loss_weights == 'average':
-            losses /= len(losses)
+
         self.save_losses(losses)
         return loss.mean()
 
