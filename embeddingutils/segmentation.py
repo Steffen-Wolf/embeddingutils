@@ -10,7 +10,7 @@ from embeddingutils.affinities import embedding_to_affinities, get_offsets, logi
 
 def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_similarity, pass_offset=False,
                      ATT_C=None, repulsive_strides=None, percentile=5, return_affinities=False,
-                     attraction_factor=1):
+                     attraction_factor=1, z_delay=0):
 
     offsets = get_offsets(offsets)
     if ATT_C is None:
@@ -22,6 +22,7 @@ def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_
 
     if repulsive_strides is None:
         repulsive_strides = (1,) * (n_img_dims - 2) + (8, 8)
+    repulsive_strides = np.array(repulsive_strides, dtype=int)
 
     # actually not needed, huge offsets are fine
     #for off in offsets:
@@ -41,6 +42,8 @@ def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_
         affinities[:, :ATT_C] *= -1
         affinities[:, :ATT_C] += 1
     affinities[:, :ATT_C] *= attraction_factor
+    if z_delay != 0:
+        affinities[:, (offsets[:, 0]!=0).astype(np.uint8)] += z_delay
 
 
     result = []
@@ -48,7 +51,7 @@ def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_
         dws = cmst.ConstrainedWatershed(np.array(img_shape),
                                         offsets,
                                         ATT_C,
-                                        np.array(repulsive_strides, int))
+                                        repulsive_strides)
         sorted_edges = np.argsort(aff, axis=None)
         dws.repulsive_ucc_mst_cut(sorted_edges, 0)
         seg = label(dws.get_flat_label_image().reshape(img_shape))
