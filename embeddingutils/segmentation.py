@@ -6,6 +6,7 @@ import numpy as np
 import hdbscan
 import collections
 from embeddingutils.affinities import embedding_to_affinities, get_offsets, logistic_similarity
+from affogato.segmentation import compute_mws_clustering
 
 
 def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_similarity, pass_offset=False,
