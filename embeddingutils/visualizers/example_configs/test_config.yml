@@ -1,0 +1,29 @@
+visualization_grid:
+  GridVisualizer:
+    input_mapping:
+      global: [B: 0, D: ':16']
+      input: ['inputs', index: 0]
+      segmentation: ['target', index: 0]
+      # this needs to be here in order for the global slicing to be applied
+      prediction: 'prediction'
+      target: 'target'
+
+    pad_width: 1
+    pad_value: .2
+    upsampling_factor: 3
+
+    visualizers:
+      - InputVisualizer:
+          cmap: inferno
+
+      - SegmentationVisualizer: {}
+
+      - SegmentationVisualizer:
+          input_mapping:
+            segmentation: ['target', C: 0, B: 0]
+
+      - MaskedPcaVisualizer:
+          input_mapping:
+            embedding: ['prediction', C: '1:']
+          ignore_label: 0
+          n_components: 6
