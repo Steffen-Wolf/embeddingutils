@@ -85,9 +85,20 @@ def get_offsets(offsets):
                                 [-9, -9], [9, -9],
                                 [-9, -4], [-4, -9], [4, -9], [9, -4],
                                 [-27, 0], [0, -27]], int)
+        elif offsets == 'long-2D':
+            offsets = np.array([[-9, 0], [0, -9],
+                                [-9, -9], [9, -9],
+                                [-9, -4], [-4, -9], [4, -9], [9, -4],
+                                [-27, 0], [0, -27]], int)
+        elif offsets == 'default-2D-in-3D':
+            offsets = get_offsets('default-2D')
+            offsets = np.concatenate([np.zeros((len(offsets), 1)), offsets], axis=-1)
+        elif offsets == 'long-2D-in-3D':
+            offsets = get_offsets('long-2D')
+            offsets = np.concatenate([np.zeros((len(offsets), 1)), offsets], axis=-1)
         else:
             assert False, "Please provide a list of offsets or one of " \
-                          "['default-3D', 'long-3D', 'minimal-3D', 'default-2D']"
+                          "['default-3D', 'long-3D', 'minimal-3D', 'default-2D', 'default-2D-in-3D']"
     return offsets if isinstance(offsets, np.ndarray) else np.array(offsets, int)
 
 
@@ -122,7 +133,7 @@ def embedding_to_affinities(emb, offsets='default-3D', affinity_measure=euclidea
 
 
 class EmbeddingToAffinities(torch.nn.Module):
-    def __init__(self, offsets='default-3D', affinity_measure=logistic_similarity, pass_offset=True):
+    def __init__(self, offsets='default-3D', affinity_measure=logistic_similarity, pass_offset=False):
         super(EmbeddingToAffinities, self).__init__()
         self.offsets = get_offsets(offsets)
         self.affinity_measure = affinity_measure

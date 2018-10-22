@@ -120,6 +120,28 @@ def nonlocal_mws_segmentation(att_aff, offsets,
     return node_labels.reshape(shape)
 
 
+def _append_coords(embedding, coord_scales):
+    # embedding should be torch tensor
+    n_img_dims = len(coord_scales)
+    emb_shape = embedding.shape
+    img_shape = emb_shape[-n_img_dims:]
+    n_pixels = np.product(img_shape)
+
+    # reshape embedding
+    embedding = embedding.contiguous().view(-1, emb_shape[-n_img_dims - 1], n_pixels).permute(0, 2, 1)
+
+    coord_axes = []
+    for i, scale in enumerate(coord_scales):
+        coord_axes.append(np.linspace(0, (img_shape[i]-1) * scale, img_shape[i], dtype=np.float32))
+    coord_mesh = np.stack(np.meshgrid(*coord_axes), axis=-1).reshape(n_pixels, -1)[None].repeat(embedding.shape[0], 0)
+    embedding = torch.cat([torch.from_numpy(coord_mesh).type(embedding.dtype), embedding], dim=-1)
+
+    # restore shape
+    resulting_shape = list(emb_shape)
+    resulting_shape[-(n_img_dims + 1)] += len(coord_scales)
+    return embedding.permute(0, 2, 1).reshape(resulting_shape)
+
+
 def hdbscan_segmentation(embedding, n_img_dims=None, coord_scales=None,
                          metric='euclidean', min_cluster_size=50, **hdbscan_kwargs):
     assert metric in hdbscan.dist_metrics.METRIC_MAPPING
@@ -129,6 +151,13 @@ def hdbscan_segmentation(embedding, n_img_dims=None, coord_scales=None,
     emb_shape = embedding.shape
     img_shape = emb_shape[-n_img_dims:]
 
+    # append image coordinates as features if requested
+    if coord_scales is not None:
+        if not isinstance(coord_scales, collections.Iterable):
+            coord_scales = n_img_dims * (coord_scales,)
+        assert len(coord_scales) == n_img_dims, f'{coord_scales}, {n_img_dims}'
+        embedding = _append_coords(coord_scales)
+
     # compute #pixels per image
     n_pixels = 1
     for s in img_shape:
@@ -136,17 +165,6 @@ def hdbscan_segmentation(embedding, n_img_dims=None, coord_scales=None,
 
     # reshape embedding for clustering
     embedding = embedding.contiguous().view(-1, emb_shape[-n_img_dims-1], n_pixels).permute(0, 2, 1)
-
-    # append image coordinates as features if requested
-    if coord_scales is not None:
-        if not isinstance(coord_scales, collections.Iterable):
-            coord_scales = n_img_dims * (coord_scales,)
-        assert len(coord_scales) == n_img_dims, f'{coord_scales}, {n_img_dims}'
-        coord_axes = []
-        for i, scale in enumerate(coord_scales):
-            coord_axes.append(np.linspace(0, (img_shape[i]-1) * scale, img_shape[i], dtype=np.float32))
-        coord_mesh = np.stack(np.meshgrid(*coord_axes), axis=-1).reshape(n_pixels, -1)[None].repeat(embedding.shape[0], 0)
-        embedding = torch.cat([torch.from_numpy(coord_mesh).type(embedding.dtype), embedding], dim=-1)
 
     # init HDBSCAN clusterer
     clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, metric=metric, **hdbscan_kwargs)
@@ -176,6 +194,8 @@ if __name__ == '__main__':
     segmentation = nonlocal_mws_segmentation(att_aff, offsets,
                                              mutex_edges, mutex_edge_weights)
 
+    print(segmentation)
+    print(len(np.unique(segmentation)))
     # import pdb; pdb.set_trace()
 
     # from embeddingutils.affinities import normalized_cosine_similarity, logistic_similarity

@@ -4,12 +4,13 @@ import torch
 import numpy as np
 from embeddingutils.affinities import *
 from inferno.extensions.criteria.set_similarity_measures import SorensenDiceLoss
+import inferno.utils.train_utils as tu
 import collections
+
 
 class WeightedLoss(torch.nn.Module):
 
-    def __init__(self, loss_weights=None, trainer=None, loss_names=None,
-                 split_by_stages=False, enable_logging=True):
+    def __init__(self, loss_weights=None, trainer=None, loss_names=None, enable_logging=True):
         super(WeightedLoss, self).__init__()
         self.loss_weights = loss_weights
         self.enable_logging = enable_logging
@@ -21,8 +22,7 @@ class WeightedLoss(torch.nn.Module):
         self.loss_names = loss_names
         self.logging_enabled = False
         self.trainer = trainer
-        assert not split_by_stages
-        self.split_by_stages = split_by_stages
+        self.validation_averages = None  # Used to keep track of averages during validation
 
     def forward(self, preds, labels):
         losses = self.get_losses(preds, labels)
@@ -48,9 +48,17 @@ class WeightedLoss(torch.nn.Module):
             else:
                 return
         losses = [loss.detach().mean() for loss in losses]
-        for i, current in enumerate(losses):
-            self.trainer.update_state(self.get_loss_name(
-                i), thu.unwrap(current))
+        # update the states corresponding to the different losses in the trainer
+        if self.trainer.model.training:  # training
+            for i, current in enumerate(losses):
+                self.trainer.update_state(self.get_loss_name(i), thu.unwrap(current))
+            self.validation_averages = None  # reset validation averages for next validation run
+        else:  # validation
+            if self.validation_averages is None:
+                self.validation_averages = [tu.AverageMeter() for _ in range(len(losses))]
+            for i, current in enumerate(losses):
+                self.validation_averages[i].update(thu.unwrap(current))
+                self.trainer.update_state(self.get_loss_name(i), self.validation_averages[i].avg)
 
     def register_logger(self, logger):
         for i in range(self.n_losses):
@@ -106,18 +114,22 @@ class LossSegmentwiseFreeTags(WeightedLoss):  # TODO: requires_grad = False on c
             None, 0], 'Ignore label other that 0 not implemented'
 
     def distance_measure(self, x1, x2, dim=1):
-        if self.use_cosine_distance:
-            try:
+        try:
+            if self.use_cosine_distance:
                 return 0.5 * (1 - cosine_similarity(x1, x2, dim=dim))
-            except:
-                import pdb; pdb.set_trace()
-        return torch.abs(x1 - x2).mean(dim=1)
+            else:
+                return torch.abs(x1 - x2).mean(dim=1)
+        except:
+            import pdb; pdb.set_trace()
 
     def push_loss(self, centroids):
         # return zero if there is only one centroid
-        if len(centroids.shape) < 3:
+        if len(centroids.shape) < 3: # TODO: ask Steffen what the first part is about..
             print("skipping because number of centroids is too low")
-            return 0.
+            return torch.zeros(1).float().mean().cuda()
+        if centroids.shape[2] <= 1:
+            print(f'skipping push: only {centroids.shape[2]} segment')
+            return torch.zeros(1).float().mean().cuda()
         # shape: n_stack * tag_dim * n_segments
         n_stack, tag_dim, n_segments = centroids.shape
         # calculate the distance of all cluster combinations
@@ -133,6 +145,9 @@ class LossSegmentwiseFreeTags(WeightedLoss):  # TODO: requires_grad = False on c
         return (self.relu(self.margin - cluster_distances)**2).mean()
 
     def pull_loss(self, preds, masks):  # TODO weigh with segment size?
+        if preds.shape[0] == 0:
+            print('skipping pull because everything is ignored')
+            return torch.zeros(1).float().mean().cuda()
         return (self.distance_measure(preds, masks)**2).mean()
 
     def get_losses(self, preds, labels):
@@ -254,9 +269,11 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
             self.seg_to_mask.offsets = offsets
 
     def push_loss(self, dists):
+        #return (self.relu(self.margin - dists)).mean()
         return (self.relu(self.margin - dists)**2).mean()
 
     def pull_loss(self, dists):
+        #return (dists).mean()
         return (dists**2).mean()
 
     def affinity_measure(self, x, y, dim, offset):
@@ -287,7 +304,9 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
         if len(preds.shape) == len(labels.shape):  # no intermediate predictions
             preds = preds[:, None]
 
-        gt_aff = self.seg_to_aff(gt_segs)
+        with torch.no_grad():
+            gt_aff = self.seg_to_aff(gt_segs)
+
         if self.affinity_weight != 0:
             if not self.affinities_direct:
                 pred_aff = self.emb_to_aff(preds)
@@ -305,7 +324,7 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
         losses_per_offset = []
         for j, offset in enumerate(offsets):  # iterate over offsets
             loss_this_offset = []
-            for i in range(pred_aff.shape[1]):  # iterate over intermediate outputs
+            for i in range(preds.shape[1]):  # iterate over intermediate outputs
                 current_loss = torch.tensor(0).float().to(preds.device)
                 if self.affinity_weight != 0:
                     ind = masks[:, j]
@@ -314,13 +333,13 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
                         current_loss += -(1-m) + m * self.affinity_weight * \
                                         self.aff_loss(1 - pred_aff[:, i, j][ind], 1 - gt_aff[:, j][ind])
                 if self.push_weight != 0:
-                    ind = masks[:, j] * gt_aff[:, j] != 0
+                    ind = masks[:, j] * (gt_aff[:, j]).byte() != 0
                     if ind.any():
                         m = ind.float().mean()
                         current_loss += m * self.push_weight * \
                                         self.push_loss(pred_dist[:, i, j][ind])
                 if self.pull_weight != 0:
-                    ind = masks[:, j] * (1 - gt_aff[:, j]) != 0
+                    ind = masks[:, j] * (1 - gt_aff[:, j]).byte() != 0
                     if ind.any():
                         m = ind.float().mean()
                         current_loss += m * self.pull_weight * \
