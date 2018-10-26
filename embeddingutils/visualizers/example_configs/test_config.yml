@@ -52,7 +52,7 @@ visualization_grid:
           input_mapping:
             prediction: [C: '1:']
 
-      # visualize which map was predicted
+      # visualize which side of the cube was predicted
       - RGBVisualizer:
           input_mapping:
             image: ['prediction', pre: {softmax: {dim: 1}}, C: '-3:']
