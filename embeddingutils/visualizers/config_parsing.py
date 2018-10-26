@@ -1,14 +1,23 @@
+from embeddingutils.visualizers.base import BaseVisualizer, ContainerVisualizer
+from embeddingutils.visualizers.base import VisualizationCallback
+from inferno.utils.io_utils import yaml2dict
+from pydoc import locate
+
 from embeddingutils.visualizers.visualizers import \
-    GridVisualizer, \
     PcaVisualizer, \
     MaskedPcaVisualizer, \
     SegmentationVisualizer, \
     InputVisualizer, \
     TargetVisualizer, \
-    PredictionVisualizer
-from embeddingutils.visualizers.base import ContainerVisualizer
-from embeddingutils.visualizers.base import VisualizationCallback
-from inferno.utils.io_utils import yaml2dict
+    PredictionVisualizer, \
+    RGBVisualizer, \
+    SigmoidVisualizer, \
+    MaskVisualizer
+
+from embeddingutils.visualizers.container_visualizers import \
+    RowVisualizer, \
+    ColumnVisualizer, \
+    OverlayVisualizer
 
 
 def get_single_key_value_pair(d):
@@ -24,14 +33,23 @@ def get_visualizer_class(name):
 
 def get_visualizer(config):
     config = yaml2dict(config)
-    name, args = get_single_key_value_pair(config)
-    if name not in globals():
+    name, kwargs = get_single_key_value_pair(config)
+    if name in globals():
+        visualizer = get_visualizer_class(name)
+    elif '.' in name:
+        visualizer = locate(name)
+        assert visualizer is not None, f'could not find {name}'
+    else:
         return config
-    visualizer = get_visualizer_class(name)
     if issubclass(visualizer, ContainerVisualizer):  # container visualizer: parse sub-visualizers first
-        assert isinstance(args['visualizers'], list), f'{args["visualizers"]}, {type(args["visualizers"])}'
-        args['visualizers'] = [get_visualizer(c) for c in args['visualizers']]
-    return visualizer(**args)
+        assert isinstance(kwargs['visualizers'], list), f'{kwargs["visualizers"]}, {type(kwargs["visualizers"])}'
+        sub_visualizers = []
+        for c in kwargs['visualizers']:
+            v = get_visualizer(c)
+            assert isinstance(v, BaseVisualizer), f'could not parse visualizer: {c}'
+            sub_visualizers.append(v)
+        kwargs['visualizers'] = sub_visualizers
+    return visualizer(**kwargs)
 
 
 def get_visualization_callback(config):
@@ -48,6 +66,22 @@ def get_visualization_callback(config):
 
 
 if __name__ == '__main__':
+    import pydoc
+
+    def import_class(name):
+        components = name.split('.')
+        mod = __import__(components[0])
+        for comp in components[1:]:
+            print(mod.__dict__)
+            mod = getattr(mod, comp)
+        return mod
+
+    v = pydoc.locate('SegTags.visualizers.OrientationVisualizer')
+    print(v)
+
+    assert False
+
+
     import torch
     import numpy as np
 

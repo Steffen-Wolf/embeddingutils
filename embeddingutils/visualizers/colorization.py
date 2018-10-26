@@ -1,6 +1,5 @@
 import embeddingutils.visualizers.base
 from embeddingutils.visualizers.dimspec import SpecFunction, convert_dim
-
 import colorsys
 import matplotlib.cm as cm
 import matplotlib.colors as colors
@@ -44,36 +43,77 @@ def _from_matplotlib_cmap(cmap):
 
 
 class Colorize(SpecFunction):
-    def __init__(self, cmap=None):
+    def __init__(self, background_label=None, background_color=None, opacity=1, value_range=None, cmap=None):
         super(Colorize, self).__init__(in_specs={'tensor': ['B', 'D', 'H', 'W', 'Color']},
                                        out_spec=['B', 'D', 'H', 'W', 'Color'])
         self.cmap = _from_matplotlib_cmap(cmap) if isinstance(cmap, str) else cmap
+        self.background_label = background_label
+        self.background_color = (0, 0, 0, 0) if background_color is None else tuple(background_color)
+        if len(self.background_color) == 3:
+            self.background_color += (1,)
+        self.opacity = opacity
+        self.value_range = value_range
+
+    def add_alpha(self, img):
+        alpha_shape = list(img.shape)
+        alpha_shape[-1] = 1
+        return torch.cat([img, torch.ones(alpha_shape, dtype=img.dtype)], dim=-1)
+
+    def normalize_colors(self, tensor):
+        shape = tensor.shape
+        tensor = tensor.contiguous().view(shape[0], -1, shape[-1]).permute(2, 0, 1)
+        # TODO: vectorize, add option to scale axis jointly (full generality)
+        # shape now Color, Batch, Pixel
+        for i in range(min(shape[-1], 3)):  # do not scale alpha channel
+            for j in range(tensor.shape[1]):
+                if self.value_range is None:
+                    minimum_value = torch.min(tensor[i, j])
+                    maximum_value = torch.max(tensor[i, j])
+                else:
+                    minimum_value, maximum_value = self.value_range
+                tensor[i, j] -= minimum_value
+                tensor[i, j] /= max(maximum_value - minimum_value, 1e-12)
+        tensor = tensor.permute(1, 2, 0).contiguous().view(shape)
+        return tensor
 
     def internal(self, tensor):
-        # TODO: proper scaling, alpha
 
-        tensor -= torch.min(tensor)
-        tensor /= torch.max(tensor)
+        if self.background_label is not None:
+            bg_mask = tensor == self.background_label
+            bg_mask = bg_mask[..., 0]
+        else:
+            bg_mask = None
 
-        # first, add color if none is there
+        # add color if there is none
         if tensor.shape[-1] == 1:  # no color yet
-            if self.cmap is not None:  # apply colormap
+            if (tensor % 1 != 0).any(): # continuous
+                tensor = self.normalize_colors(tensor)
+
+            if self.cmap is not None:
                 dtype = tensor.dtype
                 tensor = self.cmap(tensor.numpy()[..., 0])[..., :3]
                 tensor = torch.tensor(tensor, dtype=dtype)
-            else:
-                tensor = tensor.repeat(1, 1, 1, 1, 3)
-        elif tensor.shape[-1] == 3:
-            pass
+            elif (tensor % 1 != 0).any() or (torch.min(tensor) == 0 and torch.max(tensor) == 1):
+                # if tensor is continuous or greyscale, default to greyscale with intensity in alpha channel
+                tensor = torch.cat([torch.zeros_like(tensor.repeat(1, 1, 1, 1, 3)), tensor], dim=-1)
+            else: # tensor is discrete with not all values in {0, 1}, hence color the segments randomly
+                tensor = torch.Tensor(colorize_segmentation(tensor[..., 0].numpy().astype(np.int32)))
+        elif tensor.shape[-1] in [3, 4]:
+            tensor = self.normalize_colors(tensor)
         else:
             assert False, f'{tensor.shape}'
 
-        # TODO: second, check if alpha channel is present and add it if it is not
-        pass
+        # add alpha channel
+        if tensor.shape[-1] == 3:
+            tensor = self.add_alpha(tensor)
+        assert tensor.shape[-1] == 4
+        tensor[..., -1] *= self.opacity  # multiply alpha channel with opacity
 
-        # TODO: lastly, scale the color channels to lie in [0, 1]
-        pass
+        if bg_mask is not None:
+            assert tensor.shape[-1] == len(self.background_color)
+            tensor[bg_mask] = torch.Tensor(self.background_color).type_as(tensor)
 
+        #print(tensor.shape)
         return tensor
 
 

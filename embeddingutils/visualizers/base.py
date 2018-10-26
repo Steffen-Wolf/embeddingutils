@@ -8,6 +8,7 @@ from inferno.utils.io_utils import yaml2dict
 from inferno.io.volumetric import volumetric_utils as vu
 import torchvision.utils as vutils
 from copy import copy
+import torch.nn.functional as F
 
 
 def get_single_key_value_pair(d):
@@ -64,6 +65,35 @@ def parse_named_slicing(slicing, spec):
     return slices
 
 
+def parse_pre_func(pre_info):
+    if isinstance(pre_info, list):
+        # parse as concatenation
+        funcs = [parse_pre_func(info) for info in pre_info]
+
+        def pre_func(x):
+            for f in funcs:
+                x = f(x)
+            return x
+
+        return pre_func
+    elif isinstance(pre_info, dict):
+        pre_name, arg_info = get_single_key_value_pair(pre_info)
+    elif isinstance(pre_info, str):
+        pre_name = pre_info
+        arg_info = []
+    else:
+        assert False, f'{pre_info}'
+    if isinstance(arg_info, dict):
+        kwargs = arg_info
+        args = []
+    elif isinstance(arg_info, list):
+        kwargs = {}
+        args = arg_info
+    pre_func_without_args = getattr(F, pre_name)
+    pre_func = lambda x: pre_func_without_args(x, *args, **kwargs)
+    return pre_func
+
+
 DEFAULT_SPECS = {
     3: list('BHW'),
     4: list('BCHW'),
@@ -109,14 +139,15 @@ def apply_slice_mapping(mapping, states, include_old_states=True):
         state_info = states[map_from_key]  # either (state, spec) or state
         state = state_info[0] if isinstance(state_info, tuple) else state_info
         if not isinstance(state, (tuple, torch.Tensor)) and isinstance(state, list):
-            #assert 'index' in map_from_info, \
-            #    f'if you give a list to the visualizer, please provide an index to use. {map_from_info}'
-
-            index = map_from_info.pop('index', 0)
-            index = int(index)
-            state = state[index]
-            assert isinstance(state, torch.Tensor), f'{map_from_key}, {type(state)}'
-
+            index = map_from_info.pop('index', None)
+            if index is not None:  # allow for index to be left unspecified
+                index = int(index)
+                state = state[index]
+                assert isinstance(state, torch.Tensor), f'{map_from_key}, {type(state)}'
+        if 'pre' in map_from_info:
+            pre_func = parse_pre_func(map_from_info.pop('pre'))
+        else:
+            pre_func = None
         # figure out spec
         if 'spec' in map_from_info:
             spec = list(map_from_info.pop('spec'))
@@ -124,35 +155,34 @@ def apply_slice_mapping(mapping, states, include_old_states=True):
             if isinstance(state_info, tuple):
                 spec = state_info[1]
             else:
-                assert len(state.shape) in DEFAULT_SPECS, f'{map_from_key}, {len(state.shape)}'
-                spec = DEFAULT_SPECS[len(state.shape)]
+                dimensionality = len(state.shape) if isinstance(state, torch.Tensor) else len(state[0].shape)
+                assert dimensionality in DEFAULT_SPECS, f'{map_from_key}, {dimensionality}'
+                spec = DEFAULT_SPECS[dimensionality]
         # get the slices
         map_from_slices = parse_named_slicing(map_from_info, spec)
         # finally map the state
-        assert len(state.shape) == len(spec), f'{state.shape}, {spec} ({map_from_key})'
-        # print()
-        # print(map_to)
-        # print(map_from_slices)
-        # print(state.shape)
-        # print(spec)
-        result[map_to] = (state[map_from_slices], spec)
+        if isinstance(state, torch.Tensor):
+            assert len(state.shape) == len(spec), f'{state.shape}, {spec} ({map_from_key})'
+            state = state[map_from_slices]
+        elif isinstance(state, list):
+            assert all(len(s.shape) == len(spec) for s in state), f'{[s.shape for s in state]}, {spec} ({map_from_key})'
+            state = [s[map_from_slices] for s in state]
+        else:
+            assert False, f'state has to be list or tensor: {map_from_key}, {type(state)}'
+
+        if pre_func is None:
+            result[map_to] = (state, spec)
+        else:
+            result[map_to] = (pre_func(state), spec)
     return result
-
-
-def to_img_grid(tensor, spec, return_spec=False):
-    collapsing_rules = [('D', 'B'), ('T', 'B')]
-    out_spec = ['B', 'C', 'Color', 'H', 'W']
-    tensor, spec = convert_dim(tensor, in_spec=spec, out_spec=out_spec, collapsing_rules=collapsing_rules,
-                               return_spec=True)
-    if return_spec:
-        return tensor, spec
-    else:
-        return tensor
 
 
 class BaseVisualizer(SpecFunction):
 
-    def __init__(self, input_mapping=None, suppress_colorization=False, cmap=None, **super_kwargs):
+    def __init__(self, input_mapping=None, suppress_colorization=False,
+                 cmap=None, background_label=None, background_color=None,
+                 value_range=None,
+                 **super_kwargs):
         # input mapping is a dictionary. Its keys are argument names that are to be passed to visualize, and its values
         # specify where to fetch them in the state dict supplied to __call__.
         # The Syntax of this specification can be one of the following:
@@ -161,7 +191,8 @@ class BaseVisualizer(SpecFunction):
         super(BaseVisualizer, self).__init__(**super_kwargs)
         self.input_mapping = input_mapping
         self.suppress_colorization = suppress_colorization
-        self.colorize = Colorize(cmap=cmap)
+        self.colorize = Colorize(cmap=cmap, background_color=background_color, background_label=background_label,
+                                 value_range=value_range)
 
     def __call__(self, return_spec=False, **states):
         # map input keywords and apply slicing
@@ -186,25 +217,58 @@ class BaseVisualizer(SpecFunction):
         pass
 
 
+def to_img_grid(tensor, spec, return_spec=False):
+    collapsing_rules = [('D', 'B'), ('T', 'B')]
+    out_spec = ['B', 'C', 'Color', 'H', 'W']
+    tensor, spec = convert_dim(tensor, in_spec=spec, out_spec=out_spec, collapsing_rules=collapsing_rules,
+                               return_spec=True)
+    if return_spec:
+        return tensor, spec
+    else:
+        return tensor
+
+
 class ContainerVisualizer(BaseVisualizer):
 
-    def __init__(self, visualizers, input_mapping=None):
-        super(ContainerVisualizer, self).__init__(input_mapping=input_mapping, in_specs={}, out_spec=[])
+    def __init__(self, visualizers, in_spec, out_spec, extra_in_specs=None, input_mapping=None,
+                 suppress_colorization=True, **super_kwargs):
+        # in_spec: spec the outputs of all visualizers will be converted to
+        self.in_spec = in_spec
         self.visualizers = visualizers
+        self.n_visualizers = len(visualizers)
+        self.visualizer_kwarg_names = ['visualized_' + str(i) for i in range(self.n_visualizers)]
+        in_specs = dict() if extra_in_specs is None else extra_in_specs
+        in_specs.update({self.visualizer_kwarg_names[i]: in_spec for i in range(self.n_visualizers)})
+        super(ContainerVisualizer, self).__init__(
+            input_mapping=input_mapping,
+            in_specs=in_specs,
+            out_spec=out_spec,
+            suppress_colorization=suppress_colorization
+        )
 
-    def __call__(self, **states):
+    def __call__(self, return_spec=False, **states):
+        states = copy(states)
         # map input keywords and apply slicing
         states = apply_slice_mapping(self.input_mapping, states)
-        # apply visualizers
-        image_grids = [v(**states, return_spec=True) for v in self.visualizers]
-        image_grids = [to_img_grid(t[0], spec=t[1]) for t in image_grids]
-        # shapes are now (B, C, Color, H, W)
-        # put W into B
-        result = self.combine(*image_grids)
-        return result.float()
+        # apply visualizers and update state dict
+        for i in range(self.n_visualizers):
+            states[self.visualizer_kwarg_names[i]] = self.visualizers[i](**states, return_spec=True)
 
-    def combine(self, *image_grids):
-        pass
+        return super(ContainerVisualizer, self).__call__(**states, return_spec=return_spec)
+
+    def internal(self, **states):
+        visualizations = []
+        for name in self.visualizer_kwarg_names:
+            visualizations.append(states[name])
+        return self.combine(*visualizations, **states)
+
+    def combine(self, *visualizations, **extra_states):
+        raise NotImplementedError
+
+
+def _remove_alpha(tensor, background_brightness=1):
+    return torch.ones_like(tensor[..., :3]) * background_brightness * (1-tensor[..., 3:4]) + \
+           tensor[..., :3] * tensor[..., 3:4]
 
 
 class VisualizationCallback(Callback):
@@ -235,7 +299,7 @@ class VisualizationCallback(Callback):
         print(f'Logging now: {self.name}')
         assert isinstance(self.logger, TensorboardLogger)
         writer = self.logger.writer
-        image = self.visualizer(**self.get_trainer_states()).permute(2, 0, 1)  # to [Color, Height, Width]
+        image = _remove_alpha(self.visualizer(**self.get_trainer_states())).permute(2, 0, 1)  # to [Color, Height, Width]
         pre = 'training' if self.trainer.model.training else 'validation'
         writer.add_image(tag=pre+'_'+self.name, img_tensor=image, global_step=self.trainer.iteration_count)
         # TODO: make Tensorboard logger accept rgb images

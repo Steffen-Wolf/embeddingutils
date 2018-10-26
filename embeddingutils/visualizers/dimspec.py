@@ -63,19 +63,39 @@ def collapse_dim(tensor, to_collapse, collapse_into=None, spec=None, return_spec
         return tensor
 
 
-def convert_dim(tensor, in_spec, out_spec, collapsing_rules=None, return_spec=False):
+def convert_dim(tensor, in_spec, out_spec, collapsing_rules=None, uncollapsing_rules=None,
+                return_spec=False, return_inverse_kwargs=False):
     assert len(tensor.shape) == len(in_spec), f'{tensor.shape}, {in_spec}'
+    temp_spec = copy(in_spec)
+    # uncollapse as specified
+    if uncollapsing_rules is not None:
+        for rule in uncollapsing_rules:
+            if isinstance(rule, tuple):
+                rule = {
+                    'to_uncollapse': rule[0],
+                    'uncollapsed_length': rule[1],
+                    'uncollapse_into': rule[2]
+                }
+            tensor, temp_spec = uncollapse_dim(tensor, spec=temp_spec, **rule, return_spec=True)
+
     # bring tensor's spec in same order as out_spec, with dims not present in out_spec at the end
-    temp_spec = join_specs(out_spec, in_spec)
-    order = list(np.argsort([temp_spec.index(d) for d in in_spec]))
+    joined_spec = join_specs(out_spec, in_spec)
+    order = list(np.argsort([joined_spec.index(d) for d in temp_spec]))
     tensor = tensor.permute(order)
-    in_spec = [in_spec[i] for i in order]
+    temp_spec = [temp_spec[i] for i in order]
     # unsqueeze to match out_spec
-    tensor = extend_dim(tensor, in_spec, temp_spec)
+    tensor = extend_dim(tensor, temp_spec, joined_spec)
+    temp_spec = joined_spec
     # apply dimension collapsing rules
+    inverse_uncollapsing_rules = []  # needed if inverse is requested
     if collapsing_rules is not None:
         for rule in collapsing_rules:
             if rule[0] in temp_spec:
+                inverse_uncollapsing_rules.append({
+                    'to_uncollapse': rule[1],
+                    'uncollapsed_length': tensor.shape[temp_spec.index(rule[0])],
+                    'uncollapse_into': rule[0]
+                })
                 # print(f'{tensor.shape}, {temp_spec}, {out_spec}')
                 tensor, temp_spec = collapse_dim(tensor, spec=temp_spec, to_collapse=rule[0], collapse_into=rule[1],
                                                  return_spec=True)
@@ -87,10 +107,21 @@ def convert_dim(tensor, in_spec, out_spec, collapsing_rules=None, return_spec=Fa
     assert all(d in out_spec for d in temp_spec), \
         f'{temp_spec}, {out_spec}: please provide appropriate collapsing rules'
     tensor = extend_dim(tensor, temp_spec, out_spec)
+
+    result = [tensor]
     if return_spec:
-        return tensor, temp_spec
+        result.append(temp_spec)
+    if return_inverse_kwargs:
+        inverse_kwargs = {
+            'in_spec': out_spec,
+            'out_spec': in_spec,
+            'uncollapsing_rules': inverse_uncollapsing_rules[::-1]
+        }
+        result.append(inverse_kwargs)
+    if len(result) == 1:
+        return result[0]
     else:
-        return tensor
+        return result
 
 
 def uncollapse_dim(tensor, to_uncollapse, uncollapsed_length, uncollapse_into=None, spec=None, return_spec=False):
@@ -125,9 +156,9 @@ class SpecFunction:
     def __init__(self, in_specs, out_spec):
         self.internal_in_specs = {key: list(in_specs[key]) for key in in_specs}
         self.internal_out_spec = list(out_spec)
-        assert (all('B' in spec for spec in self.internal_in_specs.values()) and 'B' in self.internal_out_spec) or \
-               (all('B' not in spec for spec in self.internal_in_specs.values()) and 'B' not in self.internal_out_spec), \
-            f'"B" has to be in all or none of the internal specs: {self.internal_in_specs}, {self.internal_out_spec}'
+        assert (all('B' in spec for spec in self.internal_in_specs.values())) or \
+               (all('B' not in spec for spec in self.internal_in_specs.values())), \
+            f'"B" has to be in all or none of the internal specs: {self.internal_in_specs}'
         if all('B' not in spec for spec in self.internal_in_specs.values()):
             self.parallel = False
             self.internal_in_specs_with_B = {key: ['B'] + self.internal_in_specs[key] for key in in_specs}
@@ -162,7 +193,7 @@ class SpecFunction:
             kwargs[kw] = arg, spec
 
         # remove specs from extra given specs that are present in internal_in_specs
-        # TODO: right now, this is unnecessary. allow for parially missing dims in the input_specs!
+        # TODO: right now, this is unnecessary. allow for partially missing dims in the input_specs!
         for d in extra_given_in_specs:
             if not all(d not in spec for spec in self.internal_in_specs.values()):
                 extra_given_in_specs.pop(d)
@@ -193,11 +224,12 @@ class SpecFunction:
             spec = ['B'] + self.internal_out_spec
 
         # uncollapse the previously collapsed dims
-        for i in reversed(range(len(extra_given_in_specs))):
-            d = list(extra_given_in_specs.keys())[i]
-            length = extra_given_in_specs[d]
-            result, spec = uncollapse_dim(result, to_uncollapse='B', uncollapsed_length=length, uncollapse_into=d,
-                                          spec=spec, return_spec=True)
+        if not (self.parallel and ('B' not in self.internal_out_spec)):  # skip if function 'consumes' parallel dimension
+            for i in reversed(range(len(extra_given_in_specs))):
+                d = list(extra_given_in_specs.keys())[i]
+                length = extra_given_in_specs[d]
+                result, spec = uncollapse_dim(result, to_uncollapse='B', uncollapsed_length=length, uncollapse_into=d,
+                                              spec=spec, return_spec=True)
 
         # finally, convert to out_spec, if specified
         if out_spec is not None:
@@ -213,6 +245,23 @@ class SpecFunction:
 
 
 if __name__ == '__main__':
+
+    # t = torch.Tensor(np.random.randn(2, 3, 4, 5))
+    # spec = list('ABCD')
+    # out_spec = list('DA')  # list('EDA')
+    # collapsing_rules = ['BD', 'CA']
+    # before = t.clone()
+    #
+    # t, inverse_kwargs = convert_dim(t, in_spec=spec, out_spec=out_spec,
+    #                                 collapsing_rules=collapsing_rules,
+    #                                 return_inverse_kwargs=True)
+    # print(inverse_kwargs)
+    #
+    # t = convert_dim(t, **inverse_kwargs)
+    # print(t.shape)
+    # print(before.shape)
+    # print((t == before).float().mean())
+
 
     # t = torch.Tensor([[[0, 1], [0, 2]], [[5, 10], [5, 20]]])
     # t = torch.Tensor([[1, 2, 3], [2, 3, 4]])
