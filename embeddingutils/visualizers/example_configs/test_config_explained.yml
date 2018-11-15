@@ -87,7 +87,7 @@ example_visualizer:  # specify name under which visualizations will be logged
                 # the mask returned by MaskVisualizers is opaque where the input is equal to mask_label.
                 # hence, the background label 0 is specified here.
                 mask_label: 0
-            - SegTags.visualizers.OrientationVisualizer3D: # of this one
+            - SegTags.visualizers.OrientationVisualizer3D:
                 input_mapping:
                   prediction: [C: '1:']
 

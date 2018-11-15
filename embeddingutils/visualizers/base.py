@@ -181,7 +181,7 @@ class BaseVisualizer(SpecFunction):
 
     def __init__(self, input_mapping=None, suppress_colorization=False,
                  cmap=None, background_label=None, background_color=None,
-                 value_range=None,
+                 value_range=None, verbose=False,
                  **super_kwargs):
         # input mapping is a dictionary. Its keys are argument names that are to be passed to visualize, and its values
         # specify where to fetch them in the state dict supplied to __call__.
@@ -193,17 +193,55 @@ class BaseVisualizer(SpecFunction):
         self.suppress_colorization = suppress_colorization
         self.colorize = Colorize(cmap=cmap, background_color=background_color, background_label=background_label,
                                  value_range=value_range)
+        self.verbose = verbose
 
     def __call__(self, return_spec=False, **states):
+
+        if self.verbose:
+            print()
+            print(f'states passed to {type(self)}:')
+            for name, state in states.items():
+                print(name)
+                if isinstance(state, tuple):
+                    print(state[1])
+                    if hasattr(state[0], 'shape'):
+                        print(state[0].shape)
+                    elif isinstance(state[0], list):
+                        for s in state[0]:
+                            print(s.shape)
+                else:
+                    print(type(state))
+
         # map input keywords and apply slicing
         states = apply_slice_mapping(self.input_mapping, states)
+
+        if self.verbose:
+            print()
+            print(f'states after slice mapping:')
+            for name, state in states.items():
+                print(name)
+                if isinstance(state, tuple):
+                    print(state[1])
+                    if hasattr(state[0], 'shape'):
+                        print(state[0].shape)
+                    elif isinstance(state[0], list):
+                        for s in state[0]:
+                            print(s.shape)
+                else:
+                    print(type(state))
+
         # apply visualize
         result, spec = super(BaseVisualizer, self).__call__(**states, return_spec=True)
+
         # color the result, if not suppressed
         result = result.float()
         if not self.suppress_colorization:
+            if self.verbose:
+                print('result before colorization:', result.shape)
             out_spec = spec if 'Color' in spec else spec + ['Color']
             result, spec = self.colorize(tensor=(result, spec), out_spec=out_spec, return_spec=True)
+        if self.verbose:
+            print('result:', result.shape)
         if return_spec:
             return result, spec
         else:
@@ -251,8 +289,9 @@ class ContainerVisualizer(BaseVisualizer):
         # map input keywords and apply slicing
         states = apply_slice_mapping(self.input_mapping, states)
         # apply visualizers and update state dict
+        in_states = states.copy()
         for i in range(self.n_visualizers):
-            states[self.visualizer_kwarg_names[i]] = self.visualizers[i](**states, return_spec=True)
+            states[self.visualizer_kwarg_names[i]] = self.visualizers[i](**in_states, return_spec=True)
 
         return super(ContainerVisualizer, self).__call__(**states, return_spec=return_spec)
 
@@ -272,16 +311,33 @@ def _remove_alpha(tensor, background_brightness=1):
 
 
 class VisualizationCallback(Callback):
-    def __init__(self, name, visualizer):
+    def __init__(self, visualizers):
         super(VisualizationCallback, self).__init__()
-        self.name = name
-        self.visualizer = visualizer
+        assert isinstance(visualizers, dict)
+        self.visualizers = visualizers  # dictionary containing the visualizers as values with their names as keys
+
+        # parameters specifying logging iterations
+        self.log_interval_factor = 1.2
+        self.min_log_interval = 20
+        self.logged_last = {'train': None, 'val': None}
 
     @property
     def logger(self):
         assert self.trainer is not None
         assert hasattr(self.trainer, 'logger')
         return self.trainer.logger
+
+    @property
+    def log_now(self):
+        phase = 'train' if self.trainer.model.training else 'val'
+        i = self.trainer.iteration_count
+        logged_last = self.logged_last[phase]
+        if logged_last is None or (i >= self.log_interval_factor * logged_last
+                      and i - logged_last >= self.min_log_interval):
+            self.logged_last[phase] = i
+            return True
+        else:
+            return False
 
     def get_trainer_states(self):
         states = ['inputs', 'error', 'target', 'prediction', 'loss']
@@ -299,23 +355,27 @@ class VisualizationCallback(Callback):
         print(f'Logging now: {self.name}')
         assert isinstance(self.logger, TensorboardLogger)
         writer = self.logger.writer
-        image = _remove_alpha(self.visualizer(**self.get_trainer_states())).permute(2, 0, 1)  # to [Color, Height, Width]
         pre = 'training' if self.trainer.model.training else 'validation'
-        writer.add_image(tag=pre+'_'+self.name, img_tensor=image, global_step=self.trainer.iteration_count)
+        for name, visualizer in self.visualizers.items():
+            image = _remove_alpha(visualizer(**self.get_trainer_states())).permute(2, 0, 1)  # to [Color, Height, Width]
+            writer.add_image(tag=pre+'_'+name, img_tensor=image, global_step=self.trainer.iteration_count)
         # TODO: make Tensorboard logger accept rgb images
         #self.logger.log_object(self.name, image)
 
     def end_of_training_iteration(self, **_):
         # log_now = self.logger.log_images_now  # TODO: ask Nasim about this
-        log_now = self.logger.log_images_every.match(
-            iteration_count=self.trainer.iteration_count,
-            epoch_count=self.trainer.epoch_count,
-            persistent=False)
-        if log_now:
+
+        # log_now = self.logger.log_images_every.match(
+        #    iteration_count=self.trainer.iteration_count,
+        #    epoch_count=self.trainer.epoch_count,
+        #    persistent=False)
+
+        if self.log_now:
             self.do_logging()
 
     def end_of_validation_run(self, **_):
-        self.do_logging()
+        if self.log_now:
+            self.do_logging()
 
 
 if __name__ == '__main__':

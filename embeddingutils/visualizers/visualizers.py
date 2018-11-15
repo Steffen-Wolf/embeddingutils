@@ -5,6 +5,18 @@ import torch
 import torch.nn.functional as F
 
 
+class ImageVisualizer(BaseVisualizer):
+    def __init__(self, **super_kwargs):
+        super(ImageVisualizer, self).__init__(
+            in_specs={'image': 'B'},
+            out_spec='B',
+            **super_kwargs
+        )
+
+    def visualize(self, image, **_):
+        return image
+
+
 class InputVisualizer(BaseVisualizer):
     def __init__(self, **super_kwargs):
         super(InputVisualizer, self).__init__(

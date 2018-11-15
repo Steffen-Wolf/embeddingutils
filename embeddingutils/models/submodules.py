@@ -6,6 +6,7 @@ from torch.nn import init
 from torch import cat
 import numpy as np
 
+
 class DepthToChannel(nn.Module):
     def forward(self, input_):
         assert len(input_.shape) == 5, \

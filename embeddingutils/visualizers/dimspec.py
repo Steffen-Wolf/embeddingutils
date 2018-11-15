@@ -2,6 +2,8 @@ import numpy as np
 import torch
 from copy import copy
 from collections import OrderedDict
+import pdb
+
 
 def join_specs(spec1, spec2):
     result = copy(spec1)
@@ -129,6 +131,7 @@ def uncollapse_dim(tensor, to_uncollapse, uncollapsed_length, uncollapse_into=No
     spec = list(range(len(tensor.shape))) if spec is None else spec
     assert to_uncollapse in spec, f'{to_uncollapse}, {spec}'
     assert uncollapse_into not in spec, f'{uncollapse_into}, {spec}'
+    assert isinstance(tensor, torch.Tensor), f'unexpected type: {type(tensor)}'
     i_from = spec.index(to_uncollapse)
     assert tensor.shape[i_from] % uncollapsed_length == 0, f'{tensor.shape[i_from]}, {uncollapsed_length}'
     new_shape = tensor.shape[:i_from] + \
@@ -222,6 +225,8 @@ class SpecFunction:
                                          for kw in kwargs})
                  for i in range(n_batch)], dim=0)
             spec = ['B'] + self.internal_out_spec
+
+        assert isinstance(result, torch.Tensor), f'unexpected type: {type(result)}'
 
         # uncollapse the previously collapsed dims
         if not (self.parallel and ('B' not in self.internal_out_spec)):  # skip if function 'consumes' parallel dimension

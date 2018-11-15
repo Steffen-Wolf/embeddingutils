@@ -12,7 +12,8 @@ from embeddingutils.visualizers.visualizers import \
     PredictionVisualizer, \
     RGBVisualizer, \
     SigmoidVisualizer, \
-    MaskVisualizer
+    MaskVisualizer, \
+    ImageVisualizer
 
 from embeddingutils.visualizers.container_visualizers import \
     RowVisualizer, \
@@ -41,6 +42,7 @@ def get_visualizer(config):
         assert visualizer is not None, f'could not find {name}'
     else:
         return config
+    print(f'parsing visualizer of type {visualizer}')
     if issubclass(visualizer, ContainerVisualizer):  # container visualizer: parse sub-visualizers first
         assert isinstance(kwargs['visualizers'], list), f'{kwargs["visualizers"]}, {type(kwargs["visualizers"])}'
         sub_visualizers = []
@@ -59,9 +61,11 @@ def get_visualization_callback(config):
     #       - check if ContainerVisualizer -> if yes costruct sub-visualizers
     #       - else, just pass arguments and construct visualizer
     config = yaml2dict(config)
-    name, config = get_single_key_value_pair(config)
-    visualizer = get_visualizer(config)
-    callback = VisualizationCallback(name, visualizer)
+    visualizers = {}
+    for name, config in config.items():
+        visualizer = get_visualizer(config)
+        visualizers[name] = visualizer
+    callback = VisualizationCallback(visualizers)
     return callback
 
 
