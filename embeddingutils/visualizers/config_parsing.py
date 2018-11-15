@@ -62,8 +62,8 @@ def get_visualization_callback(config):
     #       - else, just pass arguments and construct visualizer
     config = yaml2dict(config)
     visualizers = {}
-    for name, config in config.items():
-        visualizer = get_visualizer(config)
+    for name, args in config.items():
+        visualizer = get_visualizer(args)
         visualizers[name] = visualizer
     callback = VisualizationCallback(visualizers)
     return callback

@@ -352,13 +352,14 @@ class VisualizationCallback(Callback):
         return result
 
     def do_logging(self, **_):
-        print(f'Logging now: {self.name}')
         assert isinstance(self.logger, TensorboardLogger)
         writer = self.logger.writer
         pre = 'training' if self.trainer.model.training else 'validation'
         for name, visualizer in self.visualizers.items():
+            print(f'Logging now: {name}')
             image = _remove_alpha(visualizer(**self.get_trainer_states())).permute(2, 0, 1)  # to [Color, Height, Width]
             writer.add_image(tag=pre+'_'+name, img_tensor=image, global_step=self.trainer.iteration_count)
+        print(f'Logging finished')
         # TODO: make Tensorboard logger accept rgb images
         #self.logger.log_object(self.name, image)
 
