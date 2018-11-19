@@ -16,9 +16,11 @@ from embeddingutils.visualizers.visualizers import \
     ImageVisualizer
 
 from embeddingutils.visualizers.container_visualizers import \
+    ImageGridVisualizer, \
     RowVisualizer, \
     ColumnVisualizer, \
-    OverlayVisualizer
+    OverlayVisualizer, \
+    RiffleVisualizer
 
 
 def get_single_key_value_pair(d):

@@ -155,22 +155,54 @@ def add_dim(tensor, length=1, new_dim=None, spec=None, return_spec=False):
         return tensor
 
 
+def equalize_specs(tensor_spec_pairs):
+    specs = [p[1] for p in tensor_spec_pairs]
+    unified_spec = list(np.unique(np.concatenate(specs)))
+    result = []
+    for i, (tensor, spec) in enumerate(tensor_spec_pairs):
+        result.append(convert_dim(tensor, spec, unified_spec, return_spec=True))
+    return result
+
+
+def equalize_shapes(tensor_spec_pairs):
+    tensor_spec_pairs = equalize_specs(tensor_spec_pairs)
+    unified_shape = np.max(np.array([list(p[0].shape) for p in tensor_spec_pairs]), axis=0)
+    result = []
+    for i, (tensor, spec) in enumerate(tensor_spec_pairs):
+        old_shape = tensor.shape
+        assert all(new_length % old_length == 0 for new_length, old_length in zip(unified_shape, old_shape)), \
+            f'Shapes not compatible: {unified_shape}, {old_shape} (spec: {spec})'
+        repeats = [new_length // old_length for new_length, old_length in zip(unified_shape, old_shape)]
+        print(repeats)
+        result.append((tensor.repeat(repeats), spec))
+    return result
+
+
 class SpecFunction:
-    def __init__(self, in_specs, out_spec):
-        self.internal_in_specs = {key: list(in_specs[key]) for key in in_specs}
-        self.internal_out_spec = list(out_spec)
-        assert (all('B' in spec for spec in self.internal_in_specs.values())) or \
-               (all('B' not in spec for spec in self.internal_in_specs.values())), \
-            f'"B" has to be in all or none of the internal specs: {self.internal_in_specs}'
-        if all('B' not in spec for spec in self.internal_in_specs.values()):
-            self.parallel = False
-            self.internal_in_specs_with_B = {key: ['B'] + self.internal_in_specs[key] for key in in_specs}
+    def __init__(self, in_specs=None, out_spec=None, suppress_spec_adjustment=True):
+        if in_specs is None or out_spec is None:
+            assert in_specs is None and out_spec is None, 'You probably want to supply both in_specs and an out_spec'
+            assert suppress_spec_adjustment is True, 'You probably want to supply both in_specs and an out_spec'
+            self.suppress_spec_adjustment = True
         else:
-            self.parallel = True
-            self.internal_in_specs_with_B = self.internal_in_specs
+            self.suppress_spec_adjustment = False
+            self.internal_in_specs = {key: list(in_specs[key]) for key in in_specs}
+            self.internal_out_spec = list(out_spec)
+            assert (all('B' in spec for spec in self.internal_in_specs.values())) or \
+                   (all('B' not in spec for spec in self.internal_in_specs.values())), \
+                f'"B" has to be in all or none of the internal specs: {self.internal_in_specs}'
+            if all('B' not in spec for spec in self.internal_in_specs.values()):
+                self.parallel = False
+                self.internal_in_specs_with_B = {key: ['B'] + self.internal_in_specs[key] for key in in_specs}
+            else:
+                self.parallel = True
+                self.internal_in_specs_with_B = self.internal_in_specs
         #self.default_out_spec = list(default_out_spec) if default_out_spec is not None else self.internal_out_spec
 
     def __call__(self, *args, out_spec=None, return_spec=False, **kwargs):
+        if self.suppress_spec_adjustment:  # just do internal
+            return self.internal(*args, out_spec=out_spec, return_spec=return_spec, **kwargs)
+
         given_spec_kwargs = [kw for kw in self.internal_in_specs if kw in kwargs]
 
         # determine the extra specs in the input. they will be put in the 'B' spec.
@@ -250,6 +282,13 @@ class SpecFunction:
 
 
 if __name__ == '__main__':
+    # test for equalize_shapes
+    t0 = torch.Tensor(np.random.randn(2, 3, 4, 5))
+    spec0 = list('ABCD')
+    t1 = torch.Tensor(np.random.randn(7, 11, 6))
+    spec1 = list('EFB')
+    print(equalize_shapes(tensor_spec_pairs=[(t0, spec0), (t1, spec1)]))
+    assert False
 
     # t = torch.Tensor(np.random.randn(2, 3, 4, 5))
     # spec = list('ABCD')

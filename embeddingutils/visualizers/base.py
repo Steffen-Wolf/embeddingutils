@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from inferno.trainers.callbacks.base import Callback
 from inferno.trainers.callbacks.logging.tensorboard import TensorboardLogger
-from embeddingutils.visualizers.dimspec import SpecFunction, convert_dim, collapse_dim
+from embeddingutils.visualizers.dimspec import SpecFunction, convert_dim, equalize_shapes
 from embeddingutils.visualizers.colorization import Colorize
 from inferno.utils.io_utils import yaml2dict
 from inferno.io.volumetric import volumetric_utils as vu
@@ -269,20 +269,26 @@ def to_img_grid(tensor, spec, return_spec=False):
 class ContainerVisualizer(BaseVisualizer):
 
     def __init__(self, visualizers, in_spec, out_spec, extra_in_specs=None, input_mapping=None,
+                 equalize_visualization_shapes=True,
                  suppress_colorization=True, **super_kwargs):
         # in_spec: spec the outputs of all visualizers will be converted to
+        # extra_in_specs: like in_specs in BaseVisualizer, for inputs from the state dict (and not other visualizers)
         self.in_spec = in_spec
         self.visualizers = visualizers
         self.n_visualizers = len(visualizers)
         self.visualizer_kwarg_names = ['visualized_' + str(i) for i in range(self.n_visualizers)]
-        in_specs = dict() if extra_in_specs is None else extra_in_specs
-        in_specs.update({self.visualizer_kwarg_names[i]: in_spec for i in range(self.n_visualizers)})
+        if in_spec is None:
+            in_specs = None
+        else:
+            in_specs = dict() if extra_in_specs is None else extra_in_specs
+            in_specs.update({self.visualizer_kwarg_names[i]: in_spec for i in range(self.n_visualizers)})
         super(ContainerVisualizer, self).__init__(
             input_mapping=input_mapping,
             in_specs=in_specs,
             out_spec=out_spec,
             suppress_colorization=suppress_colorization
         )
+        self.equalize_visualization_shapes = equalize_visualization_shapes
 
     def __call__(self, return_spec=False, **states):
         states = copy(states)
@@ -290,9 +296,14 @@ class ContainerVisualizer(BaseVisualizer):
         states = apply_slice_mapping(self.input_mapping, states)
         # apply visualizers and update state dict
         in_states = states.copy()
+        visualizations = []
         for i in range(self.n_visualizers):
-            states[self.visualizer_kwarg_names[i]] = self.visualizers[i](**in_states, return_spec=True)
-
+            visualizations.append(self.visualizers[i](**in_states, return_spec=True))
+        if self.equalize_visualization_shapes:
+            # add dimensions and reapeat them to make shapes of all visualizations match
+            visualizations = equalize_shapes(tensor_spec_pairs=visualizations)
+        for i, v in enumerate(visualizations):
+            states[self.visualizer_kwarg_names[i]] = visualizations[i]
         return super(ContainerVisualizer, self).__call__(**states, return_spec=return_spec)
 
     def internal(self, **states):
@@ -357,6 +368,7 @@ class VisualizationCallback(Callback):
         pre = 'training' if self.trainer.model.training else 'validation'
         for name, visualizer in self.visualizers.items():
             print(f'Logging now: {name}')
+            print(visualizer)
             image = _remove_alpha(visualizer(**self.get_trainer_states())).permute(2, 0, 1)  # to [Color, Height, Width]
             writer.add_image(tag=pre+'_'+name, img_tensor=image, global_step=self.trainer.iteration_count)
         print(f'Logging finished')

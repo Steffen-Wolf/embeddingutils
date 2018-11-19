@@ -73,6 +73,7 @@ class Colorize(SpecFunction):
                     minimum_value, maximum_value = self.value_range
                 tensor[i, j] -= minimum_value
                 tensor[i, j] /= max(maximum_value - minimum_value, 1e-12)
+            tensor[i] = tensor[i].clamp(0, 1)
         tensor = tensor.permute(1, 2, 0).contiguous().view(shape)
         return tensor
 
@@ -86,16 +87,20 @@ class Colorize(SpecFunction):
 
         # add color if there is none
         if tensor.shape[-1] == 1:  # no color yet
-            if (tensor % 1 != 0).any(): # continuous
+            # if continuous, normalize colors
+            if (tensor % 1 != 0).any():
                 tensor = self.normalize_colors(tensor)
 
+            # if a colormap is specified, apply it
             if self.cmap is not None:
                 dtype = tensor.dtype
                 tensor = self.cmap(tensor.numpy()[..., 0])[..., :3]
                 tensor = torch.tensor(tensor, dtype=dtype)
+            # if continuous and no cmap, use grayscale
             elif (tensor % 1 != 0).any() or (torch.min(tensor) == 0 and torch.max(tensor) == 1):
                 # if tensor is continuous or greyscale, default to greyscale with intensity in alpha channel
                 tensor = torch.cat([torch.zeros_like(tensor.repeat(1, 1, 1, 1, 3)), tensor], dim=-1)
+
             else: # tensor is discrete with not all values in {0, 1}, hence color the segments randomly
                 tensor = torch.Tensor(colorize_segmentation(tensor[..., 0].numpy().astype(np.int32)))
         elif tensor.shape[-1] in [3, 4]:
