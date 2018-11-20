@@ -1,5 +1,4 @@
-from embeddingutils.visualizers.base import BaseVisualizer, ContainerVisualizer
-from embeddingutils.visualization import pca
+from embeddingutils.visualizers.base import ContainerVisualizer
 from embeddingutils.visualizers.dimspec import convert_dim
 import torch
 import torch.nn.functional as F

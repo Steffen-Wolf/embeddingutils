@@ -49,9 +49,16 @@ def _add_alpha(img):
 
 
 class Colorize(SpecFunction):
-    def __init__(self, background_label=None, background_color=None, opacity=1, value_range=None, cmap=None):
-        super(Colorize, self).__init__(in_specs={'tensor': ['B', 'D', 'H', 'W', 'Color']},
-                                       out_spec=['B', 'D', 'H', 'W', 'Color'])
+    def __init__(self, background_label=None, background_color=None, opacity=1, value_range=None, cmap=None,
+                 color_jointly=None):
+        color_jointly = ('W', 'H', 'D') if color_jointly is None else list(color_jointly)
+        collapse_into = {'rest': 'B'}
+        collapse_into.update({d: 'Pixels' for d in color_jointly})
+        print('colorize:', collapse_into)
+        print('cmap:', cmap)
+        super(Colorize, self).__init__(in_specs={'tensor': ['B', 'Pixels', 'Color']},
+                                       out_spec=['B', 'Pixels', 'Color'],
+                                       collapse_into=collapse_into)
         self.cmap = _from_matplotlib_cmap(cmap) if isinstance(cmap, str) else cmap
         self.background_label = background_label
         self.background_color = (0, 0, 0, 0) if background_color is None else tuple(background_color)
@@ -64,11 +71,10 @@ class Colorize(SpecFunction):
         return _add_alpha(img)
 
     def normalize_colors(self, tensor):
-        shape = tensor.shape
-        tensor = tensor.contiguous().view(shape[0], -1, shape[-1]).permute(2, 0, 1)
-        # TODO: vectorize, add option to scale axis jointly (full generality)
-        # shape now Color, Batch, Pixel
-        for i in range(min(shape[-1], 3)):  # do not scale alpha channel
+        tensor = tensor.permute(2, 0, 1)
+        # TODO: vectorize
+        # shape Color, Batch, Pixel
+        for i in range(min(tensor.shape[0], 3)):  # do not scale alpha channel
             for j in range(tensor.shape[1]):
                 if self.value_range is None:
                     minimum_value = torch.min(tensor[i, j])
@@ -78,11 +84,10 @@ class Colorize(SpecFunction):
                 tensor[i, j] -= minimum_value
                 tensor[i, j] /= max(maximum_value - minimum_value, 1e-12)
             tensor[i] = tensor[i].clamp(0, 1)
-        tensor = tensor.permute(1, 2, 0).contiguous().view(shape)
+        tensor = tensor.permute(1, 2, 0)
         return tensor
 
     def internal(self, tensor):
-
         if self.background_label is not None:
             bg_mask = tensor == self.background_label
             bg_mask = bg_mask[..., 0]
@@ -103,7 +108,7 @@ class Colorize(SpecFunction):
             # if continuous and no cmap, use grayscale
             elif (tensor % 1 != 0).any() or (torch.min(tensor) == 0 and torch.max(tensor) == 1):
                 # if tensor is continuous or greyscale, default to greyscale with intensity in alpha channel
-                tensor = torch.cat([torch.zeros_like(tensor.repeat(1, 1, 1, 1, 3)), tensor], dim=-1)
+                tensor = torch.cat([torch.zeros_like(tensor.repeat(1, 1, 3)), tensor], dim=-1)
 
             else:  # tensor is discrete with not all values in {0, 1}, hence color the segments randomly
                 tensor = torch.Tensor(colorize_segmentation(tensor[..., 0].numpy().astype(np.int32)))

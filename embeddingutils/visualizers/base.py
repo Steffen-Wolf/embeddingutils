@@ -180,7 +180,7 @@ def apply_slice_mapping(mapping, states, include_old_states=True):
 class BaseVisualizer(SpecFunction):
 
     def __init__(self, input_mapping=None, suppress_colorization=False,
-                 cmap=None, background_label=None, background_color=None,
+                 cmap=None, background_label=None, background_color=None, color_jointly=None,
                  value_range=None, verbose=False,
                  **super_kwargs):
         # input mapping is a dictionary. Its keys are argument names that are to be passed to visualize, and its values
@@ -192,7 +192,7 @@ class BaseVisualizer(SpecFunction):
         self.input_mapping = input_mapping
         self.suppress_colorization = suppress_colorization
         self.colorize = Colorize(cmap=cmap, background_color=background_color, background_label=background_label,
-                                 value_range=value_range)
+                                 value_range=value_range, color_jointly=color_jointly)
         self.verbose = verbose
 
     def __call__(self, return_spec=False, **states):
@@ -237,6 +237,7 @@ class BaseVisualizer(SpecFunction):
         result = result.float()
         if not self.suppress_colorization:
             if self.verbose:
+                print('colorizing now:', type(self))
                 print('result before colorization:', result.shape)
             out_spec = spec if 'Color' in spec else spec + ['Color']
             result, spec = self.colorize(tensor=(result, spec), out_spec=out_spec, return_spec=True)
@@ -286,7 +287,8 @@ class ContainerVisualizer(BaseVisualizer):
             input_mapping=input_mapping,
             in_specs=in_specs,
             out_spec=out_spec,
-            suppress_colorization=suppress_colorization
+            suppress_colorization=suppress_colorization,
+            **super_kwargs
         )
         self.equalize_visualization_shapes = equalize_visualization_shapes
 
