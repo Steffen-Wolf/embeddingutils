@@ -42,6 +42,12 @@ def _from_matplotlib_cmap(cmap):
     return scalarMap.to_rgba
 
 
+def _add_alpha(img):
+    alpha_shape = list(img.shape)
+    alpha_shape[-1] = 1
+    return torch.cat([img, torch.ones(alpha_shape, dtype=img.dtype)], dim=-1)
+
+
 class Colorize(SpecFunction):
     def __init__(self, background_label=None, background_color=None, opacity=1, value_range=None, cmap=None):
         super(Colorize, self).__init__(in_specs={'tensor': ['B', 'D', 'H', 'W', 'Color']},
@@ -55,9 +61,7 @@ class Colorize(SpecFunction):
         self.value_range = value_range
 
     def add_alpha(self, img):
-        alpha_shape = list(img.shape)
-        alpha_shape[-1] = 1
-        return torch.cat([img, torch.ones(alpha_shape, dtype=img.dtype)], dim=-1)
+        return _add_alpha(img)
 
     def normalize_colors(self, tensor):
         shape = tensor.shape
@@ -101,9 +105,10 @@ class Colorize(SpecFunction):
                 # if tensor is continuous or greyscale, default to greyscale with intensity in alpha channel
                 tensor = torch.cat([torch.zeros_like(tensor.repeat(1, 1, 1, 1, 3)), tensor], dim=-1)
 
-            else: # tensor is discrete with not all values in {0, 1}, hence color the segments randomly
+            else:  # tensor is discrete with not all values in {0, 1}, hence color the segments randomly
                 tensor = torch.Tensor(colorize_segmentation(tensor[..., 0].numpy().astype(np.int32)))
         elif tensor.shape[-1] in [3, 4]:
+            assert self.cmap is None
             tensor = self.normalize_colors(tensor)
         else:
             assert False, f'{tensor.shape}'

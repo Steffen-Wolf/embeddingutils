@@ -173,7 +173,6 @@ def equalize_shapes(tensor_spec_pairs):
         assert all(new_length % old_length == 0 for new_length, old_length in zip(unified_shape, old_shape)), \
             f'Shapes not compatible: {unified_shape}, {old_shape} (spec: {spec})'
         repeats = [new_length // old_length for new_length, old_length in zip(unified_shape, old_shape)]
-        print(repeats)
         result.append((tensor.repeat(repeats), spec))
     return result
 

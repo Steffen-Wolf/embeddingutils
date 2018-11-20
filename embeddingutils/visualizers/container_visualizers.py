@@ -16,12 +16,30 @@ def _to_img_grid(tensor, spec, return_spec=False):
         return tensor
 
 
+def _to_rgba(color):
+    if isinstance(color, (int, float)):  # color given as brightness
+        result = [color, color, color, 1]
+    elif isinstance(color, list):
+        if len(color) == 3:  # color given as RGB
+            result = color + [1]
+        elif len(color) == 4:
+            result = color.copy()
+        else:
+            assert False, f'len({color}) = {len(color)} has to be in [3, 4]'
+    else:
+        assert False, f'color specification not understood: {color}'
+    return result
+
+
 def _padded_concatenate(tensors, dim, pad_width, pad_value):
     tensors = list(tensors)
+    device = tensors[0].device
     if pad_width != 0:
         pad_shape = list(tensors[0].shape)
         pad_shape[dim] = pad_width
-        pad_tensor = torch.ones(pad_shape).to(tensors[0].device) * pad_value
+        if isinstance(pad_value, list):
+            pad_value = torch.Tensor(pad_value).to(device).type_as(tensors[0])
+        pad_tensor = torch.ones(pad_shape).to(device) * pad_value
         [tensors.insert(i, pad_tensor) for i in range(len(tensors)-1, 0, -1)]
     return torch.cat(tensors, dim=dim)
 
@@ -52,12 +70,13 @@ class ImageGridVisualizer(ContainerVisualizer):
         self.n_col_dims = len(column_specs)
         self.initial_spec = list(row_specs) + list(column_specs) + ['out_height', 'out_width', 'Color']
 
-        self.pad_width = pad_width
         self.pad_value = pad_value
+        self.pad_width = pad_width
 
         self.upsampling_factor = upsampling_factor
 
     def get_pad_kwargs(self, spec):
+        # helper function to manage padding widths and values
         result = dict()
         hw = ('H', 'W')
         if isinstance(self.pad_width, dict):
@@ -69,10 +88,14 @@ class ImageGridVisualizer(ContainerVisualizer):
             result['pad_value'] = self.pad_value.get(spec, self.pad_value.get('rest', .5))
         else:
             result['pad_value'] = self.pad_value if spec not in hw else 0
+        result['pad_value'] = _to_rgba(result['pad_value'])
 
         return result
 
     def visualization_to_image(self, visualization, spec):
+        # this function should not be overridden for regular container visualizers, but is here, as the specs have to be
+        # known in the main visualization function. 'combine()' is never called, internal is used directly
+
         collapsing_rules = [(d, 'B') for d in spec if d not in self.initial_spec]  # everything unknown goes into batch
         visualization, spec = convert_dim(visualization, in_spec=spec, out_spec=self.initial_spec,
                                           collapsing_rules=collapsing_rules, return_spec=True)
@@ -81,22 +104,16 @@ class ImageGridVisualizer(ContainerVisualizer):
         for _ in range(self.n_row_dims):
             visualization = _padded_concatenate(visualization, dim=-3, **self.get_pad_kwargs(spec[0]))
             spec = spec[1:]
-            print(spec)
-            print(visualization.shape)
-            print()
+
         # collapse the columns in the 'out_height' dimension, it is at position -3
         for _ in range(self.n_col_dims):
             visualization = _padded_concatenate(visualization, dim=-2, **self.get_pad_kwargs(spec[0]))
             spec = spec[1:]
-            print(spec)
-            print(visualization.shape)
-            print()
         return visualization
 
     def internal(self, *args, return_spec=False, **states):
         images = []
         for name in self.visualizer_kwarg_names:
-            print(name, 'spec:', states[name][1])
             images.append(self.visualization_to_image(*states[name]))
 
         if self.visualizer_stacking == 'rows':

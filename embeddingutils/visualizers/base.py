@@ -358,7 +358,7 @@ class VisualizationCallback(Callback):
         for s in states:
             state = self.trainer.get_state(pre + '_' + s)
             if isinstance(state, torch.Tensor):
-                state = state.cpu().detach()  #logging is done on the cpu
+                state = state.cpu().detach().clone()  #logging is done on the cpu
             result[s] = state
         return result
 
@@ -368,7 +368,6 @@ class VisualizationCallback(Callback):
         pre = 'training' if self.trainer.model.training else 'validation'
         for name, visualizer in self.visualizers.items():
             print(f'Logging now: {name}')
-            print(visualizer)
             image = _remove_alpha(visualizer(**self.get_trainer_states())).permute(2, 0, 1)  # to [Color, Height, Width]
             writer.add_image(tag=pre+'_'+name, img_tensor=image, global_step=self.trainer.iteration_count)
         print(f'Logging finished')
