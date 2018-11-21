@@ -54,8 +54,6 @@ class Colorize(SpecFunction):
         color_jointly = ('W', 'H', 'D') if color_jointly is None else list(color_jointly)
         collapse_into = {'rest': 'B'}
         collapse_into.update({d: 'Pixels' for d in color_jointly})
-        print('colorize:', collapse_into)
-        print('cmap:', cmap)
         super(Colorize, self).__init__(in_specs={'tensor': ['B', 'Pixels', 'Color']},
                                        out_spec=['B', 'Pixels', 'Color'],
                                        collapse_into=collapse_into)

@@ -179,7 +179,7 @@ def apply_slice_mapping(mapping, states, include_old_states=True):
 
 class BaseVisualizer(SpecFunction):
 
-    def __init__(self, input_mapping=None, suppress_colorization=False,
+    def __init__(self, input_mapping=None, colorize=True,
                  cmap=None, background_label=None, background_color=None, color_jointly=None,
                  value_range=None, verbose=False,
                  **super_kwargs):
@@ -190,9 +190,9 @@ class BaseVisualizer(SpecFunction):
         #   - a list, consisting of the name of the entry in the state dict and a slicing configuration
         super(BaseVisualizer, self).__init__(**super_kwargs)
         self.input_mapping = input_mapping
-        self.suppress_colorization = suppress_colorization
-        self.colorize = Colorize(cmap=cmap, background_color=background_color, background_label=background_label,
-                                 value_range=value_range, color_jointly=color_jointly)
+        self.colorize = colorize
+        self.colorization_func = Colorize(cmap=cmap, background_color=background_color, background_label=background_label,
+                                          value_range=value_range, color_jointly=color_jointly)
         self.verbose = verbose
 
     def __call__(self, return_spec=False, **states):
@@ -235,12 +235,12 @@ class BaseVisualizer(SpecFunction):
 
         # color the result, if not suppressed
         result = result.float()
-        if not self.suppress_colorization:
+        if self.colorize:
             if self.verbose:
                 print('colorizing now:', type(self))
                 print('result before colorization:', result.shape)
             out_spec = spec if 'Color' in spec else spec + ['Color']
-            result, spec = self.colorize(tensor=(result, spec), out_spec=out_spec, return_spec=True)
+            result, spec = self.colorization_func(tensor=(result, spec), out_spec=out_spec, return_spec=True)
         if self.verbose:
             print('result:', result.shape)
         if return_spec:
@@ -271,7 +271,7 @@ class ContainerVisualizer(BaseVisualizer):
 
     def __init__(self, visualizers, in_spec, out_spec, extra_in_specs=None, input_mapping=None,
                  equalize_visualization_shapes=True,
-                 suppress_colorization=True, **super_kwargs):
+                 colorize=False, **super_kwargs):
         # in_spec: spec the outputs of all visualizers will be converted to
         # extra_in_specs: like in_specs in BaseVisualizer, for inputs from the state dict (and not other visualizers)
         self.in_spec = in_spec
@@ -287,7 +287,7 @@ class ContainerVisualizer(BaseVisualizer):
             input_mapping=input_mapping,
             in_specs=in_specs,
             out_spec=out_spec,
-            suppress_colorization=suppress_colorization,
+            colorize=colorize,
             **super_kwargs
         )
         self.equalize_visualization_shapes = equalize_visualization_shapes

@@ -20,7 +20,8 @@ from embeddingutils.visualizers.container_visualizers import \
     RowVisualizer, \
     ColumnVisualizer, \
     OverlayVisualizer, \
-    RiffleVisualizer
+    RiffleVisualizer, \
+    StackVisualizer
 
 
 def get_single_key_value_pair(d):

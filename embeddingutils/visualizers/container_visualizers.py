@@ -4,17 +4,6 @@ import torch
 import torch.nn.functional as F
 
 
-def _to_img_grid(tensor, spec, return_spec=False):
-    collapsing_rules = [('D', 'B'), ('T', 'B')]
-    out_spec = ['B', 'C', 'H', 'W', 'Color']
-    tensor, spec = convert_dim(tensor, in_spec=spec, out_spec=out_spec, collapsing_rules=collapsing_rules,
-                               return_spec=True)
-    if return_spec:
-        return tensor, spec
-    else:
-        return tensor
-
-
 def _to_rgba(color):
     if isinstance(color, (int, float)):  # color given as brightness
         result = [color, color, color, 1]
@@ -133,66 +122,20 @@ class ImageGridVisualizer(ContainerVisualizer):
             return result
 
 
-class RowVisualizer(ContainerVisualizer):
-    def __init__(self, pad_width=1, pad_value=.2, upsampling_factor=1, *super_args, **super_kwargs):
+class RowVisualizer(ImageGridVisualizer):
+    def __init__(self, *super_args, **super_kwargs):
         super(RowVisualizer, self).__init__(
-            in_spec=['B', 'C', 'Color', 'T', 'D', 'H', 'W'],
-            out_spec=['H', 'W', 'Color'],
-            equalize_visualization_shapes=False,
+            row_specs=('H', 'S', 'C', 'V'),
+            column_specs=('W', 'D', 'T', 'B'),
             *super_args, **super_kwargs)
-        self.pad_width = pad_width
-        self.pad_value = pad_value
-        assert isinstance(upsampling_factor, int)
-        self.upsampling_factor = upsampling_factor
 
 
-    def combine(self, *image_grids, **_):
-        assert all(all(grid.shape[i] == image_grids[0].shape[i] for grid in image_grids[1:]) for i in [0, 2, 4]), \
-            f'Batch, Color and Width dimension must have same length, {[grid.shape for grid in image_grids]}'
-
-        image_grids = [_to_img_grid(grid, self.in_spec) for grid in image_grids]
-        # shape now ['B', 'C', 'H', 'W', 'Color']
-        image_grids = [_padded_concatenate(grid, dim=2, pad_width=self.pad_width, pad_value=self.pad_value)
-                       for grid in image_grids]
-        # shape now ['C', 'H', 'W', 'Color']
-        image_grids = [_padded_concatenate(grid, dim=0, pad_width=self.pad_width, pad_value=self.pad_value)
-                       for grid in image_grids]
-        # shape now [B, C, Color] == [H, W, Color] as images
-        result = _padded_concatenate(image_grids, dim=0, pad_width=self.pad_width, pad_value=self.pad_value)
-
-        if self.upsampling_factor is not 1:
-            result = F.upsample(
-                result.permute(2, 0, 1)[None],
-                scale_factor=self.upsampling_factor,
-                mode='nearest')
-            result = result[0].permute(1, 2, 0)
-
-        return result
-
-
-class ColumnVisualizer(RowVisualizer):
-    def combine(self, *image_grids, **_):
-        assert all(all(grid.shape[i] == image_grids[0].shape[i] for grid in image_grids[1:]) for i in [0, 2, 4]), \
-            f'Batch, Color and Width dimension must have same length, {[grid.shape for grid in image_grids]}'
-
-        image_grids = [_to_img_grid(grid, self.in_spec) for grid in image_grids]
-        # shape now ['B', 'C', 'H', 'W', 'Color']
-        image_grids = [_padded_concatenate(grid, dim=1, pad_width=self.pad_width, pad_value=self.pad_value)
-                       for grid in image_grids]
-        # shape now ['C', 'H', 'W', 'Color']
-        image_grids = [_padded_concatenate(grid, dim=1, pad_width=self.pad_width, pad_value=self.pad_value)
-                       for grid in image_grids]
-        # shape now ['H', 'W', 'Color']
-        result = _padded_concatenate(image_grids, dim=1, pad_width=self.pad_width, pad_value=self.pad_value)
-
-        if self.upsampling_factor is not 1:
-            result = F.upsample(
-                result.permute(2, 0, 1)[None],
-                scale_factor=self.upsampling_factor,
-                mode='nearest')
-            result = result[0].permute(1, 2, 0)
-
-        return result
+class ColumnVisualizer(ImageGridVisualizer):
+    def __init__(self, *super_args, **super_kwargs):
+        super(ColumnVisualizer, self).__init__(
+            row_specs=('W', 'D', 'T', 'B'),
+            column_specs=('H', 'S', 'C', 'V'),
+            *super_args, **super_kwargs)
 
 
 class OverlayVisualizer(ContainerVisualizer):
@@ -214,10 +157,10 @@ class OverlayVisualizer(ContainerVisualizer):
 
 
 class RiffleVisualizer(ContainerVisualizer):
-    def __init__(self, *super_args, **super_kwargs):
+    def __init__(self, riffle_dim='C', *super_args, **super_kwargs):
         super(RiffleVisualizer, self).__init__(
-            in_spec=['C', 'B'],
-            out_spec=['C', 'B'],
+            in_spec=[riffle_dim, 'B'],
+            out_spec=[riffle_dim, 'B'],
             *super_args, **super_kwargs
         )
 
@@ -227,4 +170,20 @@ class RiffleVisualizer(ContainerVisualizer):
             f'Not all input visualizations have the same shape: {[v.shape for v in visualizations]}'
         result = torch.stack(visualizations, dim=1)
         result = result.contiguous().view(-1, visualizations[0].shape[1])
+        return result
+
+
+class StackVisualizer(ContainerVisualizer):
+    def __init__(self, stack_dim='S', *super_args, **super_kwargs):
+        super(StackVisualizer, self).__init__(
+            in_spec=['B'],
+            out_spec=[stack_dim, 'B'],
+            *super_args, **super_kwargs
+        )
+
+    def combine(self, *visualizations, **_):
+        assert len(visualizations) > 0
+        assert all(v.shape == visualizations[0].shape for v in visualizations[1:]), \
+            f'Not all input visualizations have the same shape: {[v.shape for v in visualizations]}'
+        result = torch.stack(visualizations, dim=0)
         return result
