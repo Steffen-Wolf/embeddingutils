@@ -133,8 +133,8 @@ class RowVisualizer(ImageGridVisualizer):
 class ColumnVisualizer(ImageGridVisualizer):
     def __init__(self, *super_args, **super_kwargs):
         super(ColumnVisualizer, self).__init__(
-            row_specs=('W', 'D', 'T', 'B'),
-            column_specs=('H', 'S', 'C', 'V'),
+            row_specs=('H', 'D', 'T', 'B'),
+            column_specs=('W', 'S', 'C', 'V'),
             *super_args, **super_kwargs)
 
 

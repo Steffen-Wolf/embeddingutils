@@ -9,6 +9,14 @@ from inferno.io.volumetric import volumetric_utils as vu
 import torchvision.utils as vutils
 from copy import copy
 import torch.nn.functional as F
+import logging
+import sys
+
+logging.basicConfig(format='[+][%(asctime)-15s][VISUALIZATION]'
+                           ' %(message)s',
+                    stream=sys.stdout,
+                    level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def get_single_key_value_pair(d):
@@ -196,7 +204,9 @@ class BaseVisualizer(SpecFunction):
         self.verbose = verbose
 
     def __call__(self, return_spec=False, **states):
-
+        
+        logger.info(f'Calling {self.__class__.__name__}.')
+        
         if self.verbose:
             print()
             print(f'states passed to {type(self)}:')
@@ -369,10 +379,10 @@ class VisualizationCallback(Callback):
         writer = self.logger.writer
         pre = 'training' if self.trainer.model.training else 'validation'
         for name, visualizer in self.visualizers.items():
-            print(f'Logging now: {name}')
+            logger.info(f'Logging now: {name}')
             image = _remove_alpha(visualizer(**self.get_trainer_states())).permute(2, 0, 1)  # to [Color, Height, Width]
             writer.add_image(tag=pre+'_'+name, img_tensor=image, global_step=self.trainer.iteration_count)
-        print(f'Logging finished')
+        logger.info(f'Logging finished')
         # TODO: make Tensorboard logger accept rgb images
         #self.logger.log_object(self.name, image)
 

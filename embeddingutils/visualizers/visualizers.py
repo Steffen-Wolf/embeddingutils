@@ -68,12 +68,12 @@ class SegmentationVisualizer(BaseVisualizer):
 class SigmoidVisualizer(BaseVisualizer):
     def __init__(self, **super_kwargs):
         super(SigmoidVisualizer, self).__init__(
-            in_specs={'images': ['B']},
+            in_specs={'image': ['B']},
             out_spec=['B'],
             **super_kwargs)
 
-    def visualize(self, images, **_):
-        return F.sigmoid(images)
+    def visualize(self, image, **_):
+        return F.sigmoid(image)
 
 
 class RGBVisualizer(BaseVisualizer):
@@ -146,3 +146,15 @@ class MaskedPcaVisualizer(BaseVisualizer):
                 result[i, :, m] = masked[i]
         result = result.contiguous().view((result.shape[0], self.n_images, 3) + result.shape[2:])
         return result
+
+
+class NormVisualizer(BaseVisualizer):
+    def __init__(self, order=2, dim='C'):
+        super(NormVisualizer, self).__init__(
+            in_specs={'tensor': ['B'] + [dim]},
+            out_spec='B'
+        )
+        self.order = order
+
+    def visualize(self, tensor):
+        return tensor.norm(p=self.order, dim=1)

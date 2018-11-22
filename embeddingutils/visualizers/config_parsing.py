@@ -2,6 +2,8 @@ from embeddingutils.visualizers.base import BaseVisualizer, ContainerVisualizer
 from embeddingutils.visualizers.base import VisualizationCallback
 from inferno.utils.io_utils import yaml2dict
 from pydoc import locate
+import logging
+import sys
 
 from embeddingutils.visualizers.visualizers import \
     PcaVisualizer, \
@@ -13,7 +15,8 @@ from embeddingutils.visualizers.visualizers import \
     RGBVisualizer, \
     SigmoidVisualizer, \
     MaskVisualizer, \
-    ImageVisualizer
+    ImageVisualizer, \
+    NormVisualizer
 
 from embeddingutils.visualizers.container_visualizers import \
     ImageGridVisualizer, \
@@ -22,6 +25,13 @@ from embeddingutils.visualizers.container_visualizers import \
     OverlayVisualizer, \
     RiffleVisualizer, \
     StackVisualizer
+
+
+logging.basicConfig(format='[+][%(asctime)-15s][VISUALIZATION]'
+                           ' %(message)s',
+                    stream=sys.stdout,
+                    level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def get_single_key_value_pair(d):
@@ -45,7 +55,7 @@ def get_visualizer(config):
         assert visualizer is not None, f'could not find {name}'
     else:
         return config
-    print(f'parsing visualizer of type {visualizer}')
+    logger.info(f'parsing visualizer of type {visualizer}')
     if issubclass(visualizer, ContainerVisualizer):  # container visualizer: parse sub-visualizers first
         assert isinstance(kwargs['visualizers'], list), f'{kwargs["visualizers"]}, {type(kwargs["visualizers"])}'
         sub_visualizers = []
@@ -79,12 +89,12 @@ if __name__ == '__main__':
         components = name.split('.')
         mod = __import__(components[0])
         for comp in components[1:]:
-            print(mod.__dict__)
+            logger.info(mod.__dict__)
             mod = getattr(mod, comp)
         return mod
 
     v = pydoc.locate('SegTags.visualizers.OrientationVisualizer')
-    print(v)
+    logger.info(v)
 
     assert False
 
