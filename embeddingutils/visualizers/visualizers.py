@@ -149,12 +149,13 @@ class MaskedPcaVisualizer(BaseVisualizer):
 
 
 class NormVisualizer(BaseVisualizer):
-    def __init__(self, order=2, dim='C'):
+    def __init__(self, order=2, dim='C', **super_kwargs):
         super(NormVisualizer, self).__init__(
             in_specs={'tensor': ['B'] + [dim]},
-            out_spec='B'
+            out_spec='B',
+            **super_kwargs
         )
         self.order = order
 
-    def visualize(self, tensor):
+    def visualize(self, tensor, **_):
         return tensor.norm(p=self.order, dim=1)
