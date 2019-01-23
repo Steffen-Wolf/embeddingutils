@@ -266,7 +266,7 @@ class UNet2D(UNet3D):
                  conv_type='vanilla2D',
                  final_activation=None,
                  *super_args, **super_kwargs):
-        self.dim = 2
+        super_kwargs.update({"conv_type": conv_type})
         super(UNet2D, self).__init__(*super_args, **super_kwargs)
 
     @property
