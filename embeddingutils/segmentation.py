@@ -1,12 +1,16 @@
 import torch
 from torch.nn.functional import cosine_similarity
 from skimage.measure import label
-import constrained_mst as cmst
 import numpy as np
 import hdbscan
 import collections
 from embeddingutils.affinities import embedding_to_affinities, get_offsets, logistic_similarity
-from affogato.segmentation import compute_mws_clustering
+try:
+    from affogato.segmentation import compute_mws_clustering
+    import constrained_mst as cmst
+    WITH_MWS = True
+except:
+    WITH_MWS = False
 
 
 def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_similarity, pass_offset=False,
