@@ -1,5 +1,6 @@
 from inferno.extensions.layers.convolutional import ConvELU3D
 
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
@@ -176,10 +177,55 @@ class ConvGRU(nn.Module):
         return cat(upd_hidden, dim=0)
 
 
+class ShakeShakeFn(torch.autograd.Function):
+    # modified from https://github.com/owruby/shake-shake_pytorch/blob/master/models/shakeshake.py
+    @staticmethod
+    def forward(ctx, x1, x2, training=True):
+        # first dim is assumed to be batch
+        if training:
+            alpha = torch.rand(x1.size(0), *((1,)*(len(x1.shape)-1)), dtype=x1.dtype, device=x1.device)
+        else:
+            alpha = 0.5
+        return alpha * x1 + (1 - alpha) * x2
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        beta = torch.rand(grad_output.size(0), *((1,) * (len(grad_output.shape) - 1)),
+                          dtype=grad_output.dtype, device=grad_output.device)
+
+        return beta * grad_output, (1 - beta) * grad_output, None
+
+
+class ShakeShakeMerge(nn.Module):
+    def forward(self, x1, x2):
+        return ShakeShakeFn.apply(x1, x2, self.training)
+
+
+
 if __name__ == '__main__':
 
     from inferno.extensions.layers.convolutional import ConvELU2D, Conv2D, BNReLUConv2D
-    import torch
+
+    a = torch.tensor([0.], requires_grad=True)
+    b = torch.tensor([1.], requires_grad=True)
+    merge = ShakeMerge()
+    c = merge(a, b)
+    print(c)
+    c.backward()
+    print(a.grad)
+    print(b.grad)
+
+    merge.eval()
+    c = merge(a, b)
+    print(c)
+    c.backward()
+    print(a.grad)
+    print(b.grad)
+
+    assert False
+
+
+
     model = ConvGRU(4, 8, (3, 5, 3), 3, Conv2D)
 
     print(model)

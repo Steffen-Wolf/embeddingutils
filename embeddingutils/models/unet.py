@@ -5,7 +5,7 @@ from inferno.extensions.layers.convolutional import ConvELU2D, Conv2D, BNReLUCon
 from inferno.extensions.layers.sampling import AnisotropicPool, AnisotropicUpsample
 from inferno.extensions.layers.reshape import Concatenate, Sum
 
-from embeddingutils.models.submodules import SuperhumanSNEMIBlock, ConvGRU
+from embeddingutils.models.submodules import SuperhumanSNEMIBlock, ConvGRU, ShakeShakeMerge
 
 
 import torch
@@ -258,6 +258,11 @@ class SuperhumanSNEMINet(UNet3D):
         f_intermediate = self.fmaps[self.depth]
         f_out = self.fmaps[self.depth-1]
         return SuperhumanSNEMIBlock(f_in=f_in, f_main=f_intermediate, f_out=f_out, conv_type=self.conv_type)
+
+
+class ShakeShakeSNEMINet(SuperhumanSNEMINet):
+    def construct_merge_module(self, depth):
+        return ShakeShakeMerge()
 
 
 class UNet2D(UNet3D):
