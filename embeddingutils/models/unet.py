@@ -267,7 +267,11 @@ class UNet2D(UNet3D):
                  final_activation=None,
                  *super_args, **super_kwargs):
         self.dim = 2
-        super(UNet2D, self).__init__(*super_args, **super_kwargs)
+        super(UNet2D, self).__init__(
+            scale_factor=scale_factor,
+            conv_type=conv_type,
+            final_activation=final_activation,
+            *super_args, **super_kwargs)
 
     @property
     def dim(self):

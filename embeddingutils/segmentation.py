@@ -156,7 +156,7 @@ def hdbscan_segmentation(embedding, n_img_dims=None, coord_scales=None,
         if not isinstance(coord_scales, collections.Iterable):
             coord_scales = n_img_dims * (coord_scales,)
         assert len(coord_scales) == n_img_dims, f'{coord_scales}, {n_img_dims}'
-        embedding = _append_coords(coord_scales)
+        embedding = _append_coords(embedding, coord_scales)
 
     # compute #pixels per image
     n_pixels = 1
@@ -164,7 +164,7 @@ def hdbscan_segmentation(embedding, n_img_dims=None, coord_scales=None,
         n_pixels *= s
 
     # reshape embedding for clustering
-    embedding = embedding.contiguous().view(-1, emb_shape[-n_img_dims-1], n_pixels).permute(0, 2, 1)
+    embedding = embedding.contiguous().view(-1, embedding.shape[-n_img_dims-1], n_pixels).permute(0, 2, 1)
 
     # init HDBSCAN clusterer
     clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, metric=metric, **hdbscan_kwargs)
