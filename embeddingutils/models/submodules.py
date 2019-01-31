@@ -201,27 +201,36 @@ class ShakeShakeMerge(nn.Module):
         return ShakeShakeFn.apply(x1, x2, self.training)
 
 
+class SampleChannels(nn.Module):
+    def __init__(self, n_selected_channels):
+        super(SampleChannels, self).__init__()
+        self.n_selected_channels = n_selected_channels
+
+    def sample_ind(self, n_channels):
+        assert self.n_selected_channels <= n_channels
+        result = np.zeros(n_channels)
+        result[np.random.choice(np.arange(n_channels), self.n_selected_channels, replace=False)] = 1
+        return result
+
+    def forward(self, input):
+        n_channels = input.size(1)
+        ind = np.stack([self.sample_ind(n_channels) for _ in range(input.size(0))])
+        ind = torch.ByteTensor(ind).to(input.device)
+        return input[ind].view(input.size(0), self.n_selected_channels, *input.shape[2:])
+
 
 if __name__ == '__main__':
 
     from inferno.extensions.layers.convolutional import ConvELU2D, Conv2D, BNReLUConv2D
 
-    a = torch.tensor([0.], requires_grad=True)
-    b = torch.tensor([1.], requires_grad=True)
-    merge = ShakeMerge()
-    c = merge(a, b)
-    print(c)
-    c.backward()
-    print(a.grad)
-    print(b.grad)
+    a = torch.rand(3, 3).requires_grad_(True)
+    model = SampleChannels(2)
 
-    merge.eval()
-    c = merge(a, b)
-    print(c)
-    c.backward()
+    print(a)
+    b = model(a)
+    print(b)
+    b.sum().backward()
     print(a.grad)
-    print(b.grad)
-
     assert False
 
 
