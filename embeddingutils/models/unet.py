@@ -5,7 +5,7 @@ from inferno.extensions.layers.convolutional import ConvELU2D, Conv2D, BNReLUCon
 from inferno.extensions.layers.sampling import AnisotropicPool, AnisotropicUpsample
 from inferno.extensions.layers.reshape import Concatenate, Sum
 
-from embeddingutils.models.submodules import SuperhumanSNEMIBlock, ConvGRU, ShakeShakeMerge
+from embeddingutils.models.submodules import SuperhumanSNEMIBlock, ConvGRU, ShakeShakeMerge, Upsample
 
 
 import torch
@@ -133,6 +133,7 @@ class UNet3D(UNetSkeleton):
                  scale_factor=2,
                  conv_type='vanilla',
                  final_activation=None,
+                 upsampling_mode='nearest',
                  *super_args, **super_kwargs):
 
         super(UNet3D, self).__init__(*super_args, **super_kwargs)
@@ -158,6 +159,7 @@ class UNet3D(UNetSkeleton):
             assert len(scale_factor) == self.dim
             normalized_factors.append(scale_factor)
         self.scale_factors = normalized_factors
+        self.upsampling_mode = upsampling_mode
 
         # compute input size divisibiliy constraints
         divisibility_constraint = np.ones(len(self.scale_factors[0]))
@@ -191,9 +193,7 @@ class UNet3D(UNetSkeleton):
         scale_factor = self.scale_factors[depth]
         if scale_factor[0] == 1:
             assert scale_factor[1] == scale_factor[2]
-            sampler = AnisotropicUpsample(scale_factor=scale_factor[1])
-        else:
-            sampler = nn.Upsample(scale_factor=scale_factor[0])
+        sampler = Upsample(scale_factor=scale_factor, mode=self.upsampling_mode)
         return sampler
 
     def forward(self, input_):

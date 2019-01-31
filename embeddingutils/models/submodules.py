@@ -219,6 +219,16 @@ class SampleChannels(nn.Module):
         return input[ind].view(input.size(0), self.n_selected_channels, *input.shape[2:])
 
 
+class Upsample(nn.Module):
+    def __init__(self, scale_factor=2, mode='nearest'):
+        super(Upsample, self).__init__()
+        self.mode = mode
+        self.scale_factor = scale_factor
+
+    def forward(self, input):
+        return nn.functional.interpolate(input, scale_factor=self.scale_factor, mode=self.mode)
+
+
 if __name__ == '__main__':
 
     from inferno.extensions.layers.convolutional import ConvELU2D, Conv2D, BNReLUConv2D
