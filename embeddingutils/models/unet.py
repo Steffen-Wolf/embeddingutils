@@ -16,30 +16,62 @@ import numpy as np
 # TODO: support residual U-Net, Hourglass-Net, 2D Versions, stacked Versions
 
 
-class EncoderDecoderSkeleton(Graph):
+class EncoderDecoderSkeleton(nn.Module):
     def __init__(self, depth):
         super(EncoderDecoderSkeleton, self).__init__()
         self.depth = depth
 
     def setup_graph(self):
         depth = self.depth
-        self.add_input_node('input')
-        for i in range(depth):
-            self.add_node(f'encoder_{i}', self.construct_encoder_module(i),
-                          previous='input' if i == 0 else f'down_{i-1}_{i}')
-            self.add_node(f'skip_{i}', self.construct_skip_module(i), previous=f'encoder_{i}')
-            self.add_node(f'down_{i}_{i+1}', self.construct_downsampling_module(i), previous=f'encoder_{i}')
+        # self.add_input_node('input')
+        # for i in range(depth):
+        #     self.add_node(f'encoder_{i}', self.construct_encoder_module(i),
+        #                   previous='input' if i == 0 else f'down_{i-1}_{i}')
+        #     self.add_node(f'skip_{i}', self.construct_skip_module(i), previous=f'encoder_{i}')
+        #     self.add_node(f'down_{i}_{i+1}', self.construct_downsampling_module(i), previous=f'encoder_{i}')
+        #
+        # self.add_node('base', self.construct_base_module(), previous=f'down_{depth-1}_{depth}')
+        #
+        # for i in reversed(range(depth)):
+        #     self.add_node(f'up_{i+1}_{i}', self.construct_upsampling_module(i),
+        #                   previous='base' if i == depth - 1 else f'decoder_{i+1}')
+        #     self.add_node(f'merge_{i}', self.construct_merge_module(i), previous=[f'skip_{i}', f'up_{i+1}_{i}'])
+        #     self.add_node(f'decoder_{i}', self.construct_decoder_module(i), previous=f'merge_{i}')
+        #
+        # self.add_node('final', self.construct_output_module(), previous=f'decoder_0')
+        # self.add_output_node('output', previous='final')
 
-        self.add_node('base', self.construct_base_module(), previous=f'down_{depth-1}_{depth}')
+        self.encoder_modules = nn.ModuleList(
+            [self.construct_encoder_module(i) for i in range(depth)])
+        self.skip_modules = nn.ModuleList(
+            [self.construct_skip_module(i) for i in range(depth)])
+        self.downsampling_modules = nn.ModuleList(
+            [self.construct_downsampling_module(i) for i in range(depth)])
+        self.upsampling_modules = nn.ModuleList(
+            [self.construct_upsampling_module(i) for i in range(depth)])
+        self.decoder_modules = nn.ModuleList(
+            [self.construct_decoder_module(i) for i in range(depth)])
+        self.merge_modules = nn.ModuleList(
+            [self.construct_merge_module(i) for i in range(depth)])
+        self.base_module = self.construct_base_module()
+        self.final_module = self.construct_output_module()
 
-        for i in reversed(range(depth)):
-            self.add_node(f'up_{i+1}_{i}', self.construct_upsampling_module(i),
-                          previous='base' if i == depth - 1 else f'decoder_{i+1}')
-            self.add_node(f'merge_{i}', self.construct_merge_module(i), previous=[f'skip_{i}', f'up_{i+1}_{i}'])
-            self.add_node(f'decoder_{i}', self.construct_decoder_module(i), previous=f'merge_{i}')
-
-        self.add_node('final', self.construct_output_module(), previous=f'decoder_0')
-        self.add_output_node('output', previous='final')
+    def forward(self, input):
+        encoded_states = []
+        current = input
+        for encode, downsample in zip(self.encoder_modules, self.downsampling_modules):
+            current = encode(current)
+            encoded_states.append(current)
+            current = downsample(current)
+        current = self.base_module(current)
+        for encoded_state, upsample, skip, merge, decode in reversed(list(zip(
+                encoded_states, self.upsampling_modules, self.skip_modules, self.merge_modules, self.decoder_modules))):
+            current = upsample(current)
+            encoded_state = skip(encoded_state)
+            current = merge(current, encoded_state)
+            current = decode(current)
+        current = self.final_module(current)
+        return current
 
     def construct_encoder_module(self, depth):
         return Identity()
