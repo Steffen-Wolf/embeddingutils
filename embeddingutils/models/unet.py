@@ -152,7 +152,8 @@ class UNet3D(UNetSkeleton):
                  upsampling_mode='nearest',
                  *super_args, **super_kwargs):
 
-        self.final_activation = [final_activation]
+
+        self.final_activation = [final_activation] if final_activation is not None else None
 
         # parse conv_type
         if isinstance(conv_type, str):
