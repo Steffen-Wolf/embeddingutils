@@ -228,7 +228,6 @@ class LossSegmentwiseFreeTags(WeightedLoss):  # TODO: requires_grad = False on c
                 pull = self.pull_loss(tags, pixelwise_centroids)
             pushes.append(push)
             pulls.append(pull)
-        # FIXME should be averaged in minibatch and split in output channels
         return torch.stack(pushes), torch.stack(pulls)
 
 
