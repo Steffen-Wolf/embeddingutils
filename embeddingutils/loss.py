@@ -8,12 +8,57 @@ import inferno.utils.train_utils as tu
 import collections
 
 
-class WeightedLoss(torch.nn.Module):
+class ScalarLoggingMixin:
+    def __init__(self):
+        super(ScalarLoggingMixin, self).__init__()
+        self.validation_averages = dict()
+        self.current_validation_iteration = None
+        self.registered_states = set()
 
-    def __init__(self, loss_weights=None, trainer=None, loss_names=None, enable_logging=True):
+    def save_scalar(self, name, value, trainer=None):
+        if trainer is None:
+            assert hasattr(self, 'trainer')
+            trainer = self.trainer
+        if isinstance(value, torch.Tensor):
+            value = value.detach().cpu().clone()
+        # add prefix ('training' or 'validation') to name
+        name = self.add_prefix(name, trainer)
+        if name not in self.registered_states:
+            self.observe_state(name, trainer)
+        if trainer.model.training:  # training
+            trainer.update_state(name, value)
+        else:  # validation
+            # check if it is a new validation run
+            if self.current_validation_iteration != trainer._last_validated_at_iteration:
+                self.current_validation_iteration = trainer._last_validated_at_iteration
+                self.validation_averages = dict()
+
+            # check if average meter for name has already been initialized this run
+            if name not in self.validation_averages:
+                self.validation_averages[name] = tu.AverageMeter()
+
+            self.validation_averages[name].update(value)
+            trainer.update_state(name, self.validation_averages[name].avg)
+
+    def observe_state(self, name, trainer):
+        assert hasattr(trainer, 'logger')
+        logger = trainer.logger
+        assert hasattr(logger, 'observe_state')
+        time = 'training' if trainer.model.training else 'validation'
+        logger.observe_state(name, time)
+
+    def add_prefix(self, name, trainer):
+        if trainer.model.training:
+            return 'training_' + name
+        else:
+            return 'validation_' + name
+
+
+class WeightedLoss(ScalarLoggingMixin, torch.nn.Module):
+
+    def __init__(self, loss_weights=None, trainer=None, loss_names=None):
         super(WeightedLoss, self).__init__()
         self.loss_weights = loss_weights
-        self.enable_logging = enable_logging
         if isinstance(loss_weights, collections.Sized) and not isinstance(loss_weights, str):
             self.n_losses = len(loss_weights)
             self.enable_logging = True
@@ -42,42 +87,9 @@ class WeightedLoss(torch.nn.Module):
     def save_losses(self, losses):
         if self.trainer is None:
             return
-        if not self.logging_enabled:
-            if self.enable_logging:
-                self.register_logger(self.trainer.logger)
-            else:
-                return
         losses = [loss.detach().mean() for loss in losses]
-        # update the states corresponding to the different losses in the trainer
-        if self.trainer.model.training:  # training
-            for i, current in enumerate(losses):
-                self.trainer.update_state(self.get_loss_name(i), thu.unwrap(current))
-            self.validation_averages = None  # reset validation averages for next validation run
-        else:  # validation
-            if self.validation_averages is None:
-                self.validation_averages = [tu.AverageMeter() for _ in range(len(losses))]
-            for i, current in enumerate(losses):
-                self.validation_averages[i].update(thu.unwrap(current))
-                self.trainer.update_state(self.get_loss_name(i), self.validation_averages[i].avg)
-
-    def register_logger(self, logger):
-        for i in range(self.n_losses):
-            logger.observe_state(self.get_loss_name(
-                i, training=True), 'training')
-            logger.observe_state(self.get_loss_name(
-                i, training=False), 'validation')
-
-        self.logging_enabled = True
-
-    def get_loss_name(self, i, training=None):
-        if training is None:
-            assert self.trainer is not None
-            assert self.trainer.model_is_defined
-            training = self.trainer.model.training
-        if training:
-            return 'training_' + self.loss_names[i]
-        else:
-            return 'validation_' + self.loss_names[i]
+        for name, value in zip(self.loss_names, losses):
+            self.save_scalar(name, value)
 
     def __getstate__(self):  # TODO make this nicer
         """Return state values to be pickled."""
@@ -87,15 +99,35 @@ class WeightedLoss(torch.nn.Module):
 
 
 class SumLoss(WeightedLoss):
-    def __init__(self, losses, **super_kwargs):
+    GRAD_PREFIX = 'grad_'
+
+    def __init__(self, losses, log_grad_norms=False, **super_kwargs):
+        super(SumLoss, self).__init__(**super_kwargs)
         assert isinstance(losses, collections.Iterable)
         self.losses = losses
-        super(SumLoss, self).__init__(**super_kwargs)
+        self.log_grad_norms = log_grad_norms
+        if self.log_grad_norms:
+            assert self.trainer is not None
+        self.hook_handle = None
+
+    def hook(self, grad):
+        # calculate mini-batch average of L2 norms of gradients on model prediction
+        grad_norms = torch.norm(grad.detach().view(grad.size(0), grad.size(1), -1), dim=2).mean(dim=1)
+        print('average gradient norms:', grad_norms)
+        for name, grad_norm in zip(self.loss_names, grad_norms):
+            self.save_scalar(self.GRAD_PREFIX + name, grad_norm)
+        self.hook_handle.remove()
 
     def get_losses(self, preds, labels):
         result = []
-        for loss in self.losses:
-            result.append(loss(preds, labels))
+        if not self.log_grad_norms or not self.trainer.model.training:
+            for loss in self.losses:
+                result.append(loss(preds, labels))
+        else:
+            pred_per_loss = preds[None].repeat(self.n_losses, *((1,) * len(preds.shape)))
+            self.hook_handle = pred_per_loss.register_hook(self.hook)
+            for pred, loss in zip(pred_per_loss, self.losses):
+                result.append(loss(pred, labels))
         return result
 
 
