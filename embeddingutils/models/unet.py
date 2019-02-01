@@ -17,6 +17,7 @@ import numpy as np
 
 
 class EncoderDecoderSkeleton(nn.Module):
+
     def __init__(self, depth):
         super(EncoderDecoderSkeleton, self).__init__()
         self.depth = depth
@@ -79,6 +80,7 @@ class EncoderDecoderSkeleton(nn.Module):
 
 
 class UNetSkeleton(EncoderDecoderSkeleton):
+
     def __init__(self, depth, in_channels, out_channels, fmaps, **kwargs):
         self.depth = depth
         self.in_channels = in_channels
@@ -90,10 +92,10 @@ class UNetSkeleton(EncoderDecoderSkeleton):
             assert isinstance(fmaps, int)
             if 'fmap_increase' in kwargs:
                 self.fmap_increase = kwargs['fmap_increase']
-                self.fmaps = [fmaps + i * self.fmap_increase for i in range(self.depth+1)]
+                self.fmaps = [fmaps + i * self.fmap_increase for i in range(self.depth + 1)]
             elif 'fmap_factor' in kwargs:
                 self.fmap_factor = kwargs['fmap_factor']
-                self.fmaps = [fmaps * self.fmap_factor**i for i in range(self.depth+1)]
+                self.fmaps = [fmaps * self.fmap_factor**i for i in range(self.depth + 1)]
             else:
                 self.fmaps = [fmaps, ] * (self.depth + 1)
         assert len(self.fmaps) == self.depth + 1
@@ -126,9 +128,9 @@ class UNetSkeleton(EncoderDecoderSkeleton):
         )
 
     def construct_base_module(self):
-        f_in = self.fmaps[self.depth-1]
+        f_in = self.fmaps[self.depth - 1]
         f_intermediate = self.fmaps[self.depth]
-        f_out = self.fmaps[self.depth-1]
+        f_out = self.fmaps[self.depth - 1]
         return nn.Sequential(
             self.construct_conv(f_in, f_intermediate),
             self.construct_conv(f_intermediate, f_out)
@@ -142,6 +144,7 @@ CONV_TYPES = {'vanilla': ConvELU3D,
 
 
 class UNet3D(UNetSkeleton):
+
     def __init__(self,
                  scale_factor=2,
                  conv_type='vanilla',
@@ -180,7 +183,7 @@ class UNet3D(UNetSkeleton):
         self.divisibility_constraint = list(divisibility_constraint.astype(int))
 
         super(UNet3D, self).__init__(*super_args, **super_kwargs)
-        #self.setup_graph()  # TODO: this is ugly. do it when forward() is called for the first time?
+        # self.setup_graph()  # TODO: this is ugly. do it when forward() is called for the first time?
 
     def construct_conv(self, f_in, f_out, kernel_size=3):
         return self.conv_type(f_in, f_out, kernel_size=kernel_size)
@@ -218,15 +221,16 @@ class UNet3D(UNetSkeleton):
 
 class SuperhumanSNEMINet(UNet3D):
     # see https://arxiv.org/pdf/1706.00120.pdf
+
     def __init__(self,
                  in_channels=1, out_channels=1,
                  fmaps=(28, 36, 48, 64, 80),
                  conv_type=ConvELU3D,
                  scale_factor=(
-                         (1, 2, 2),
-                         (1, 2, 2),
-                         (1, 2, 2),
-                         (1, 2, 2)
+                     (1, 2, 2),
+                     (1, 2, 2),
+                     (1, 2, 2),
+                     (1, 2, 2)
                  ),
                  depth=None,
                  **kwargs):
@@ -246,7 +250,7 @@ class SuperhumanSNEMINet(UNet3D):
         return Sum()
 
     def construct_encoder_module(self, depth):
-        f_in = self.fmaps[depth-1] if depth != 0 else self.in_channels
+        f_in = self.fmaps[depth - 1] if depth != 0 else self.in_channels
         f_out = self.fmaps[depth]
         if depth != 0:
             return SuperhumanSNEMIBlock(f_in=f_in, f_out=f_out, conv_type=self.conv_type)
@@ -267,18 +271,20 @@ class SuperhumanSNEMINet(UNet3D):
             )
 
     def construct_base_module(self):
-        f_in = self.fmaps[self.depth-1]
+        f_in = self.fmaps[self.depth - 1]
         f_intermediate = self.fmaps[self.depth]
-        f_out = self.fmaps[self.depth-1]
+        f_out = self.fmaps[self.depth - 1]
         return SuperhumanSNEMIBlock(f_in=f_in, f_main=f_intermediate, f_out=f_out, conv_type=self.conv_type)
 
 
 class ShakeShakeSNEMINet(SuperhumanSNEMINet):
+
     def construct_merge_module(self, depth):
         return ShakeShakeMerge()
 
 
 class UNet2D(UNet3D):
+
     def __init__(self,
                  conv_type='vanilla2D',
                  *super_args, **super_kwargs):
@@ -298,6 +304,7 @@ class UNet2D(UNet3D):
 
 
 class RecurrentUNet2D(UNet2D):
+
     def __init__(self,
                  scale_factor=2,
                  conv_type='vanilla2D',
@@ -353,8 +360,7 @@ if __name__ == '__main__':
 
     print(model)
     model = model.cuda()
-    inp = torch.ones(tuple((np.array(model.divisibility_constraint)*2)))[None, None].cuda()
+    inp = torch.ones(tuple((np.array(model.divisibility_constraint) * 2)))[None, None].cuda()
     out = model(inp)
     print(inp.shape)
     print(out.shape)
-
