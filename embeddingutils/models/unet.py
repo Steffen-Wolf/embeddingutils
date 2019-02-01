@@ -20,27 +20,7 @@ class EncoderDecoderSkeleton(nn.Module):
     def __init__(self, depth):
         super(EncoderDecoderSkeleton, self).__init__()
         self.depth = depth
-
-    def setup_graph(self):
-        depth = self.depth
-        # self.add_input_node('input')
-        # for i in range(depth):
-        #     self.add_node(f'encoder_{i}', self.construct_encoder_module(i),
-        #                   previous='input' if i == 0 else f'down_{i-1}_{i}')
-        #     self.add_node(f'skip_{i}', self.construct_skip_module(i), previous=f'encoder_{i}')
-        #     self.add_node(f'down_{i}_{i+1}', self.construct_downsampling_module(i), previous=f'encoder_{i}')
-        #
-        # self.add_node('base', self.construct_base_module(), previous=f'down_{depth-1}_{depth}')
-        #
-        # for i in reversed(range(depth)):
-        #     self.add_node(f'up_{i+1}_{i}', self.construct_upsampling_module(i),
-        #                   previous='base' if i == depth - 1 else f'decoder_{i+1}')
-        #     self.add_node(f'merge_{i}', self.construct_merge_module(i), previous=[f'skip_{i}', f'up_{i+1}_{i}'])
-        #     self.add_node(f'decoder_{i}', self.construct_decoder_module(i), previous=f'merge_{i}')
-        #
-        # self.add_node('final', self.construct_output_module(), previous=f'decoder_0')
-        # self.add_output_node('output', previous='final')
-
+        # construct all the layers
         self.encoder_modules = nn.ModuleList(
             [self.construct_encoder_module(i) for i in range(depth)])
         self.skip_modules = nn.ModuleList(
@@ -100,7 +80,6 @@ class EncoderDecoderSkeleton(nn.Module):
 
 class UNetSkeleton(EncoderDecoderSkeleton):
     def __init__(self, depth, in_channels, out_channels, fmaps, **kwargs):
-        super(UNetSkeleton, self).__init__(depth)
         self.depth = depth
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -120,6 +99,8 @@ class UNetSkeleton(EncoderDecoderSkeleton):
         assert len(self.fmaps) == self.depth + 1
 
         self.merged_fmaps = [2 * n for n in self.fmaps]
+
+        super(UNetSkeleton, self).__init__(depth)
 
     def construct_conv(self, f_in, f_out):
         pass
@@ -168,9 +149,8 @@ class UNet3D(UNetSkeleton):
                  upsampling_mode='nearest',
                  *super_args, **super_kwargs):
 
-        super(UNet3D, self).__init__(*super_args, **super_kwargs)
+        self.final_activation = [final_activation]
 
-        self.final_activation = final_activation
         # parse conv_type
         if isinstance(conv_type, str):
             assert conv_type in CONV_TYPES
@@ -199,14 +179,15 @@ class UNet3D(UNetSkeleton):
             divisibility_constraint *= np.array(scale_factor)
         self.divisibility_constraint = list(divisibility_constraint.astype(int))
 
-        self.setup_graph()  # TODO: this is ugly. do it when forward() is called for the first time?
+        super(UNet3D, self).__init__(*super_args, **super_kwargs)
+        #self.setup_graph()  # TODO: this is ugly. do it when forward() is called for the first time?
 
     def construct_conv(self, f_in, f_out, kernel_size=3):
         return self.conv_type(f_in, f_out, kernel_size=kernel_size)
 
     def construct_output_module(self):
         if self.final_activation is not None:
-            return self.final_activation
+            return self.final_activation[0]
         else:
             return Identity()
 
