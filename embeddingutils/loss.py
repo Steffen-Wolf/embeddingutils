@@ -99,28 +99,50 @@ class WeightedLoss(ScalarLoggingMixin, torch.nn.Module):
 
 
 class SumLoss(WeightedLoss):
-    GRAD_PREFIX = 'grad_'
+    GRAD_PREFIX = {
+        'norm': 'grad-norm_',
+        'max': 'grad-max_',
+        'mean': 'grad-mean_',
+    }
 
-    def __init__(self, losses, log_grad_norms=False, **super_kwargs):
+    def __init__(self, losses, grad_stats=None, **super_kwargs):
         super(SumLoss, self).__init__(**super_kwargs)
         assert isinstance(losses, collections.Iterable)
         self.losses = losses
-        self.log_grad_norms = log_grad_norms
-        if self.log_grad_norms:
+        self.grad_stats = grad_stats
+        assert grad_stats is None or all(stat in self.GRAD_PREFIX for stat in grad_stats), \
+            f'Supported stats: {list(self.GRAD_PREFIX.keys())}. Got {grad_stats}'
+        if self.grad_stats is not None:
             assert self.trainer is not None
         self.hook_handle = None
 
+    def save_grad_stats(self, stat_name, values):
+        # divide by loss weights to get unweighted grad norms that are comparable for different weights
+        values = [value / w for value, w in zip(values, self.loss_weights)]
+        for name, value in zip(self.loss_names, values):
+            self.save_scalar(self.GRAD_PREFIX[stat_name] + name, value)
+
     def hook(self, grad):
-        # calculate mini-batch average of L2 norms of gradients on model prediction
-        grad_norms = torch.norm(grad.detach().view(grad.size(0), grad.size(1), -1), dim=2).mean(dim=1)
-        print('average gradient norms:', grad_norms)
-        for name, grad_norm in zip(self.loss_names, grad_norms):
-            self.save_scalar(self.GRAD_PREFIX + name, grad_norm)
+        grad = grad.detach()
+        if 'norm' in self.grad_stats:
+            # calculate mini-batch average of L2 norms of gradients on model prediction
+            grad = grad.view(grad.size(0), grad.size(1), -1)
+            grad_norms = torch.norm(grad, dim=2).mean(dim=1)
+            # divide by loss weights to get unweighted grad norms that are comparable for different weights
+            self.save_grad_stats('norm', grad_norms)
+        if 'max' in self.grad_stats:
+            # calculate the maximum gradient applied on a single pixel.
+            grad_max = grad.view(grad.size(0), -1).abs().max(dim=1)[0]
+            self.save_grad_stats('max', grad_max)
+        if 'mean' in self.grad_stats:
+            # calculate the mean gradients.
+            grad_mean = grad.view(grad.size(0), -1).mean(dim=1)
+            self.save_grad_stats('mean', grad_mean)
         self.hook_handle.remove()
 
     def get_losses(self, preds, labels):
         result = []
-        if not self.log_grad_norms or not self.trainer.model.training:
+        if self.grad_stats is None or not self.trainer.model.training:
             for loss in self.losses:
                 result.append(loss(preds, labels))
         else:
@@ -131,37 +153,36 @@ class SumLoss(WeightedLoss):
         return result
 
 
-class LossSegmentwiseFreeTags(WeightedLoss):  # TODO: requires_grad = False on centroids
+class LossSegmentwiseFreeTags(WeightedLoss):
     def __init__(self, margin=0.25, loss_weights=(1, 0.1), ignore_label=None,
-                 use_cosine_distance=False, **super_kwargs):
-        super(LossSegmentwiseFreeTags, self).__init__(
-            loss_weights=loss_weights,
-            loss_names=['push-loss', 'pull-loss'],
-            **super_kwargs)
+                 use_cosine_distance=False, weigh_push_with_size=True, **super_kwargs):
+        super_kwargs = dict(loss_weights=loss_weights, loss_names=['push-loss', 'pull-loss'], **super_kwargs)
+        super(LossSegmentwiseFreeTags, self).__init__(**super_kwargs)
         self.margin = margin
         self.relu = torch.nn.ReLU()
         self.ignore_label = ignore_label
         self.use_cosine_distance = use_cosine_distance
-        assert self.ignore_label in [
-            None, 0], 'Ignore label other that 0 not implemented'
+        self.weigh_push_with_size = weigh_push_with_size
+        assert self.ignore_label in [None, 0], \
+            'Ignore label other that 0 not implemented'
 
     def distance_measure(self, x1, x2, dim=1):
         try:
             if self.use_cosine_distance:
                 return 0.5 * (1 - cosine_similarity(x1, x2, dim=dim))
             else:
-                return torch.abs(x1 - x2).mean(dim=1)
+                return torch.abs(x1 - x2).mean(dim=1)  # FIXME: having L1 norm here and squaring it later is awkward
         except:
             import pdb; pdb.set_trace()
 
-    def push_loss(self, centroids):
+    def push_loss(self, centroids, weights=None):
         # return zero if there is only one centroid
-        if len(centroids.shape) < 3: # TODO: ask Steffen what the first part is about..
+        if len(centroids.shape) < 3:
             print("skipping because number of centroids is too low")
-            return torch.zeros(1).float().mean().cuda()
+            return torch.zeros(1).float().mean().to(centroids.device)
         if centroids.shape[2] <= 1:
             print(f'skipping push: only {centroids.shape[2]} segment')
-            return torch.zeros(1).float().mean().cuda()
+            return torch.zeros(1).float().mean().to(centroids.device)
         # shape: n_stack * tag_dim * n_segments
         n_stack, tag_dim, n_segments = centroids.shape
         # calculate the distance of all cluster combinations
@@ -169,26 +190,34 @@ class LossSegmentwiseFreeTags(WeightedLoss):  # TODO: requires_grad = False on c
                                                 centroids[:, :, None, :].repeat(1, 1, n_segments, 1))
 
         # select vectorized upper triangle of distance matrix
-        upper_tri_index = torch.arange(1, n_segments*n_segments+1)\
-                            .view(n_segments, n_segments)\
-                            .triu(diagonal=1).nonzero().transpose(0, 1)
-        cluster_distances = distance_matrix[:, upper_tri_index[0], upper_tri_index[1]]
+        distance_weights = 1
+        if distance_matrix.shape[0] > 1:
+            upper_tri_index = torch.arange(1, n_segments*n_segments+1)\
+                                .view(n_segments, n_segments)\
+                                .triu(diagonal=1).nonzero().transpose(0, 1)
+            cluster_distances = distance_matrix[:, upper_tri_index[0], upper_tri_index[1]]
+            if weights is not None:
+                weight_matrix = weights[None] * weights[:, None]
+                distance_weights = weight_matrix[None, upper_tri_index[0], upper_tri_index[1]]
+                distance_weights = distance_weights.expand_as(cluster_distances)
+        else:
+            cluster_distances = distance_matrix[0].triu(diagonal=1)[None]
+            if weights is not None:
+                distance_weights = weights[None] * weights[:, None]
 
-        return (self.relu(self.margin - cluster_distances)**2).mean()
+        return (distance_weights * self.relu(self.margin - cluster_distances)**2).mean()
 
-    def pull_loss(self, preds, masks):  # TODO weigh with segment size?
+    def pull_loss(self, preds, masks):
         if preds.shape[0] == 0:
             print('skipping pull because everything is ignored')
             return torch.zeros(1).float().mean().cuda()
         return (self.distance_measure(preds, masks)**2).mean()
 
     def get_losses(self, preds, labels):
-
         if torch.is_tensor(labels):
             gt_segs = labels
         else:
             gt_segs = labels[0]
-
         if len(preds.shape) == len(labels.shape):  # no intermediate predictions
             preds = preds[:, None]
 
@@ -197,37 +226,41 @@ class LossSegmentwiseFreeTags(WeightedLoss):  # TODO: requires_grad = False on c
         for gt_seg, tags in zip(gt_segs, preds):  # iterate over minibatch
             n_segments = torch.max(gt_seg).int().item() + 1
             gt_seg = gt_seg.long()
-            assert gt_seg.shape[
-                0] == 1, 'segmentation should have one channel only'
-            gt_seg = gt_seg[0]
+            assert gt_seg.shape[0] == 1, 'segmentation should have one channel only'
 
-            centroids = []
-            for seg_id in range(n_segments):
-                if self.ignore_label == seg_id:
-                    centroids.append(tags.new(np.zeros((tags.shape[0], tags.shape[1]))))
-                    continue
-                centroids.append(tags[:, :, gt_seg == seg_id].mean(-1))
+            # get rid of extra spatial dimensions
+            gt_seg = gt_seg[0].flatten()
+            tags = tags.view(*tags.shape[:2], -1)
 
-            centroids = torch.stack(centroids, dim=0)
-            # move fist axis to the last position in n-dim
-            centroids = centroids.permute(*(list(range(1, len(centroids.shape))) + [0]))
-
-            if self.ignore_label == 0:
-                push = self.push_loss(centroids[..., 1:])
-            elif self.ignore_label is None:
-                push = self.push_loss(centroids)
-            else:
-                raise NotImplemented("ignore_label other than 0 not implemented")
-
-            pixelwise_centroids = centroids[:, :, gt_seg].contiguous()
-
+            # mask away ignore regions
+            mask_ratio = 1
             if self.ignore_label is not None:
-                pull = self.pull_loss(tags[:, :, gt_seg.ne(self.ignore_label)],
-                                      pixelwise_centroids[:, :, gt_seg.ne(self.ignore_label)])
-            else:
-                pull = self.pull_loss(tags, pixelwise_centroids)
+                n_segments -= 1
+                mask = gt_seg.ne(self.ignore_label)
+                mask_ratio = mask.float().mean()
+                gt_seg = gt_seg[mask] - 1
+                tags = tags[:, :, mask]
+
+            # calculate centroids and segment sizes of the individual segments
+            centroids = []
+            segment_sizes = []
+            for seg_id in range(n_segments):
+                seg_mask = gt_seg == seg_id
+                segment_sizes.append(seg_mask.float().sum())
+                centroids.append(tags[:, :, seg_mask].mean(-1))
+            centroids = torch.stack(centroids, dim=-1)
+            segment_sizes = torch.stack(segment_sizes)
+
+            # push loss
+            push_weights = segment_sizes / tags[0].nelement()**0.5 if self.weigh_push_with_size else None
+            push = self.push_loss(centroids, weights=push_weights)
             pushes.append(push)
+
+            # pull loss, scale with mask ratio to avoid gradient spikes
+            pixel_wise_centroids = centroids.detach()[:, :, gt_seg]
+            pull = mask_ratio * self.pull_loss(tags, pixel_wise_centroids)
             pulls.append(pull)
+
         return torch.stack(pushes), torch.stack(pulls)
 
 
