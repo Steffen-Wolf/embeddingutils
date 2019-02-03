@@ -218,7 +218,7 @@ class LossSegmentwiseFreeTags(WeightedLoss):
         if self.push_weighting == 'vanilla':
             # behaviour as previous to refactor of this loss
             n_comparisons = 0.5 * (n_segments-1) * n_segments
-            return n_comparisons ** -0.5
+            return 0 if n_comparisons == 0 else n_comparisons ** -0.5
         if self.push_weighting == 'per_pixel':
             return segment_sizes ** 0.5
         assert False, 'push weighting not understood'
