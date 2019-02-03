@@ -16,11 +16,20 @@ def ignore_label_mask_similarity(x, y, dim=0, ignore_label=0):
 
 
 def euclidean_distance(x, y, dim=0):
-    return torch.sqrt(((x - y)**2).sum(dim))
+    return (x - y).norm(p=2, dim=dim)
 
 
 def squared_euclidean_distance(x, y, dim=0):
     return ((x - y) ** 2).sum(dim)
+
+
+def l1_distance(x, y, dim=0):
+    return (x - y).norm(p=1, dim=dim)
+
+
+def mean_l1_distance(x, y, dim=0):
+    # l1 distance divided by dimension. was previously used in segmentwise free loss
+    return l1_distance(x, y, dim=dim) / x.size(dim)
 
 
 def logistic_similarity(x, y, dim=0, offset=None):
@@ -29,6 +38,10 @@ def logistic_similarity(x, y, dim=0, offset=None):
     else:
         sig = np.linalg.norm(offset)
     return 2 / (1 + (1 / torch.exp(-squared_euclidean_distance(x, y, dim=dim)/(2 * sig**2)).clamp(min=1e-10)))
+
+
+def cosine_distance(x, y, dim=0):
+    return 0.5 * (1 - F.cosine_similarity(x, y, dim=dim))
 
 
 def normalized_cosine_similarity(x, y, dim=0):

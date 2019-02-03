@@ -1,6 +1,7 @@
 from torch.nn.functional import cosine_similarity
 import inferno.utils.torch_utils as thu
 import torch
+import torch.nn.functional as F
 import numpy as np
 from embeddingutils.affinities import *
 from inferno.extensions.criteria.set_similarity_measures import SorensenDiceLoss
@@ -76,7 +77,7 @@ class WeightedLoss(ScalarLoggingMixin, torch.nn.Module):
             if self.loss_weights is not None and not isinstance(self.loss_weights, str):
                 weight = self.loss_weights[i]
             elif self.loss_weights == 'average':
-                weight = 1/len(losses)
+                weight = 1 / len(losses)
             else:
                 weight = 1
             loss = loss + weight * current
@@ -154,64 +155,129 @@ class SumLoss(WeightedLoss):
 
 
 class LossSegmentwiseFreeTags(WeightedLoss):
-    def __init__(self, margin=0.25, loss_weights=(1, 0.1), ignore_label=None,
-                 use_cosine_distance=False, weigh_push_with_size=True, **super_kwargs):
+    DISTANCE_MEASURES = {
+        'l1_norm': l1_distance,
+        'mean_l1_norm': mean_l1_distance,
+        'l2_norm': euclidean_distance,
+        'squared_l2_norm': squared_euclidean_distance,
+        'cosine_distance': cosine_distance,
+        'angular_distance': None,  # TODO
+    }
+    LOSS_FUNCS = {
+        'mse': lambda tensor: tensor**2,
+        'l1': lambda tensor: tensor.abs(),
+        'huber': lambda tensor: F.smooth_l1_loss(tensor, tensor.new_zeros(1), reduce='none'),
+    }
+    PUSH_WEIGHTINGS = ['vanilla', 'per_pixel']
+    PULL_WEIGHTINGS = ['vanilla', 'per_pixel']
+
+    def __init__(self, loss_weights=(1, 0.1), ignore_label=None,
+                 push_distance_measure='mean_l1_norm', push_loss_func='mse', push_margin=0.25, push_weighting='vanilla',
+                 pull_distance_measure='mean_l1_norm', pull_loss_func='mse', pull_margin=0.00, pull_weighting='vanilla',
+                 use_cosine_distance=False, **super_kwargs):
+
         super_kwargs = dict(loss_weights=loss_weights, loss_names=['push-loss', 'pull-loss'], **super_kwargs)
         super(LossSegmentwiseFreeTags, self).__init__(**super_kwargs)
-        self.margin = margin
-        self.relu = torch.nn.ReLU()
+
         self.ignore_label = ignore_label
-        self.use_cosine_distance = use_cosine_distance
-        self.weigh_push_with_size = weigh_push_with_size
         assert self.ignore_label in [None, 0], \
             'Ignore label other that 0 not implemented'
 
-    def distance_measure(self, x1, x2, dim=1):
-        try:
-            if self.use_cosine_distance:
-                return 0.5 * (1 - cosine_similarity(x1, x2, dim=dim))
-            else:
-                return torch.abs(x1 - x2).mean(dim=1)  # FIXME: having L1 norm here and squaring it later is awkward
-        except:
-            import pdb; pdb.set_trace()
+        # for a bit of backwards compatibility (yeah, a lot of things are not)
+        if use_cosine_distance:
+            print("'use_cosine_distance' is deprecated.")
+            push_distance_measure = 'cosine_distance'
+            pull_distance_measure = 'cosine_distance'
 
-    def push_loss(self, centroids, weights=None):
+        # set attributes for push loss
+        self.push_distance_measure = push_distance_measure if callable(push_distance_measure) else \
+            self.DISTANCE_MEASURES[push_distance_measure]
+        self.push_loss_func = push_loss_func if callable(push_loss_func) else \
+            self.LOSS_FUNCS[push_loss_func]
+        self.push_margin = push_margin
+        self.push_weighting = push_weighting
+        assert callable(self.push_weighting) or self.push_weighting in self.PUSH_WEIGHTINGS
+
+        # set attributes for pull loss
+        self.pull_distance_measure = pull_distance_measure if callable(pull_distance_measure) else \
+            self.DISTANCE_MEASURES[pull_distance_measure]
+        self.pull_loss_func = pull_loss_func if callable(pull_loss_func) else \
+            self.LOSS_FUNCS[pull_loss_func]
+        self.pull_margin = pull_margin
+        self.pull_weighting = pull_weighting
+        assert callable(self.pull_weighting) or self.pull_weighting in self.PULL_WEIGHTINGS
+
+    def get_push_weights(self, segment_sizes, n_segments, n_pixels, n_active_pixels):
+        if callable(self.push_weighting):
+            return self.push_weighting(
+                segment_sizes=segment_sizes,
+                n_segments=n_segments,
+                n_pixels=n_pixels,
+                n_active_pixels=n_active_pixels
+            )
+        if self.push_weighting == 'vanilla':
+            # behaviour as previous to refactor of this loss
+            n_comparisons = 0.5 * (n_segments-1) * n_segments
+            return n_comparisons ** -0.5
+        if self.push_weighting == 'per_pixel':
+            return segment_sizes ** 0.5
+        assert False, 'push weighting not understood'
+
+    def get_pull_weights(self, segment_sizes, n_segments, n_pixels, n_active_pixels):
+        if callable(self.pull_weighting):
+            return self.pull_weighting(
+                segment_sizes=segment_sizes,
+                n_segments=n_segments,
+                n_pixels=n_pixels,
+                n_active_pixels=n_active_pixels
+            )
+        if self.pull_weighting == 'vanilla':
+            # behaviour as previous to refactor of this loss
+            return 1 / n_active_pixels
+        if self.pull_weighting == 'per_pixel':
+            # constant gradient per pixel independent of segment size is equivalent to weighting the means with
+            # segment size.
+            return 1
+        assert False, 'pull weighting not understood'
+
+    def push_loss(self, centroids, weights=1):
         # return zero if there is only one centroid
-        if len(centroids.shape) < 3:
-            print("skipping because number of centroids is too low")
-            return torch.zeros(1).float().mean().to(centroids.device)
-        if centroids.shape[2] <= 1:
-            print(f'skipping push: only {centroids.shape[2]} segment')
-            return torch.zeros(1).float().mean().to(centroids.device)
+        if len(centroids.shape) < 3 or centroids.shape[2] <= 1:
+            print("skipping push because number of centroids is too low")
+            return centroids.new_zeros(1)
         # shape: n_stack * tag_dim * n_segments
         n_stack, tag_dim, n_segments = centroids.shape
         # calculate the distance of all cluster combinations
-        distance_matrix = self.distance_measure(centroids[:, :, :, None].repeat(1, 1, 1, n_segments),
-                                                centroids[:, :, None, :].repeat(1, 1, n_segments, 1))
-
+        distance_matrix = self.push_distance_measure(
+            centroids[:, :, :, None].repeat(1, 1, 1, n_segments),
+            centroids[:, :, None, :].repeat(1, 1, n_segments, 1),
+            dim=1
+        )
         # select vectorized upper triangle of distance matrix
-        distance_weights = 1
-        if distance_matrix.shape[0] > 1:
-            upper_tri_index = torch.arange(1, n_segments*n_segments+1)\
-                                .view(n_segments, n_segments)\
-                                .triu(diagonal=1).nonzero().transpose(0, 1)
-            cluster_distances = distance_matrix[:, upper_tri_index[0], upper_tri_index[1]]
-            if weights is not None:
-                weight_matrix = weights[None] * weights[:, None]
-                distance_weights = weight_matrix[None, upper_tri_index[0], upper_tri_index[1]]
-                distance_weights = distance_weights.expand_as(cluster_distances)
+        upper_tri_index = torch.arange(1, n_segments * n_segments + 1) \
+            .view(n_segments, n_segments) \
+            .triu(diagonal=1).nonzero().transpose(0, 1)
+        cluster_distances = distance_matrix[:, upper_tri_index[0], upper_tri_index[1]]
+
+        # determine weights for loss on individual distances
+        if isinstance(weights, torch.Tensor) and tuple(weights.shape) == (n_segments,):
+            weight_matrix = weights[None] * weights[:, None]
+            distance_weights = weight_matrix[None, upper_tri_index[0], upper_tri_index[1]]
+            distance_weights = distance_weights.expand_as(cluster_distances)
+        elif weights is not None:
+            distance_weights = weights
         else:
-            cluster_distances = distance_matrix[0].triu(diagonal=1)[None]
-            if weights is not None:
-                distance_weights = weights[None] * weights[:, None]
+            distance_weights = 1
 
-        return (distance_weights * self.relu(self.margin - cluster_distances)**2).mean()
+        return (distance_weights * self.push_loss_func(F.relu(self.push_margin - cluster_distances))).sum()
 
-    def pull_loss(self, preds, masks):
-        if preds.shape[0] == 0:
+    def pull_loss(self, embedding, centroids, weights=1):
+        if embedding.shape[0] == 0:
             print('skipping pull because everything is ignored')
-            return torch.zeros(1).float().mean().cuda()
-        return (self.distance_measure(preds, masks)**2).mean()
+            return embedding.new_zeros(1)
+        return (weights * self.pull_loss_func(
+            F.relu(self.pull_distance_measure(embedding, centroids, dim=1) - self.pull_margin)
+        )).sum()
 
     def get_losses(self, preds, labels):
         if torch.is_tensor(labels):
@@ -221,44 +287,48 @@ class LossSegmentwiseFreeTags(WeightedLoss):
         if len(preds.shape) == len(labels.shape):  # no intermediate predictions
             preds = preds[:, None]
 
-        pulls = []
-        pushes = []
-        for gt_seg, tags in zip(gt_segs, preds):  # iterate over minibatch
+        pushes, pulls = [], []
+        for gt_seg, embeddings in zip(gt_segs, preds):  # iterate over minibatch
             n_segments = torch.max(gt_seg).int().item() + 1
             gt_seg = gt_seg.long()
             assert gt_seg.shape[0] == 1, 'segmentation should have one channel only'
 
             # get rid of extra spatial dimensions
             gt_seg = gt_seg[0].flatten()
-            tags = tags.view(*tags.shape[:2], -1)
+            embeddings = embeddings.view(*embeddings.shape[:2], -1)
+
+            # set up dictionary with information used to compute the segment and pixel weights for pull and push
+            weighting_info = dict(n_pixels=gt_seg.nelement())
 
             # mask away ignore regions
-            mask_ratio = 1
             if self.ignore_label is not None:
                 n_segments -= 1
                 mask = gt_seg.ne(self.ignore_label)
-                mask_ratio = mask.float().mean()
                 gt_seg = gt_seg[mask] - 1
-                tags = tags[:, :, mask]
+                embeddings = embeddings[:, :, mask]
+                weighting_info['n_active_pixels'] = mask.long().sum().item()
+            weighting_info['n_segments'] = n_segments
 
             # calculate centroids and segment sizes of the individual segments
             centroids = []
             segment_sizes = []
             for seg_id in range(n_segments):
-                seg_mask = gt_seg == seg_id
-                segment_sizes.append(seg_mask.float().sum())
-                centroids.append(tags[:, :, seg_mask].mean(-1))
+                segment_mask = gt_seg == seg_id
+                segment_sizes.append(segment_mask.float().sum())
+                centroids.append(embeddings[:, :, segment_mask].mean(-1))
             centroids = torch.stack(centroids, dim=-1)
             segment_sizes = torch.stack(segment_sizes)
+            weighting_info['segment_sizes'] = segment_sizes
 
             # push loss
-            push_weights = segment_sizes / tags[0].nelement()**0.5 if self.weigh_push_with_size else None
+            push_weights = self.get_push_weights(**weighting_info)
             push = self.push_loss(centroids, weights=push_weights)
             pushes.append(push)
 
             # pull loss, scale with mask ratio to avoid gradient spikes
-            pixel_wise_centroids = centroids.detach()[:, :, gt_seg]
-            pull = mask_ratio * self.pull_loss(tags, pixel_wise_centroids)
+            pixel_wise_centroids = centroids[:, :, gt_seg]
+            pull_weights = self.get_pull_weights(**weighting_info)
+            pull = self.pull_loss(embeddings, pixel_wise_centroids, weights=pull_weights)
             pulls.append(pull)
 
         return torch.stack(pushes), torch.stack(pulls)
@@ -278,7 +348,7 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
             self.offsets = get_offsets(offsets)
             self.dynamic_offsets = False
             if loss_weights is None:
-                loss_weights = (1/len(self.offsets),) * len(self.offsets)
+                loss_weights = (1 / len(self.offsets),) * len(self.offsets)
             assert len(loss_weights) == len(self.offsets)
             loss_names = ["offset_" + '_'.join(str(o) for o in off) for off in self.offsets]
             print(loss_names)
@@ -333,12 +403,12 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
             self.seg_to_mask.offsets = offsets
 
     def push_loss(self, dists):
-        #return (self.relu(self.margin - dists)).mean()
-        return (self.relu(self.margin - dists)**2).mean()
+        # return (self.relu(self.margin - dists)).mean()
+        return (self.relu(self.margin - dists) ** 2).mean()
 
     def pull_loss(self, dists):
-        #return (dists).mean()
-        return (dists**2).mean()
+        # return (dists).mean()
+        return (dists ** 2).mean()
 
     def affinity_measure(self, x, y, dim, offset):
         if self.use_cosine_distance:
@@ -394,7 +464,7 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
                     ind = masks[:, j]
                     if ind.any():
                         m = ind.float().mean()
-                        current_loss += -(1-m) + m * self.affinity_weight * \
+                        current_loss += -(1 - m) + m * self.affinity_weight * \
                                         self.aff_loss(1 - pred_aff[:, i, j][ind], 1 - gt_aff[:, j][ind])
                 if self.push_weight != 0:
                     ind = masks[:, j] * (gt_aff[:, j]).byte() != 0
