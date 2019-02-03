@@ -244,7 +244,7 @@ class LossSegmentwiseFreeTags(WeightedLoss):
         # return zero if there is only one centroid
         if len(centroids.shape) < 3 or centroids.shape[2] <= 1:
             print("skipping push because number of centroids is too low")
-            return centroids.new_zeros(1)
+            return centroids.new_zeros(1)[0]
         # shape: n_stack * tag_dim * n_segments
         n_stack, tag_dim, n_segments = centroids.shape
         # calculate the distance of all cluster combinations
@@ -274,7 +274,7 @@ class LossSegmentwiseFreeTags(WeightedLoss):
     def pull_loss(self, embedding, centroids, weights=1):
         if embedding.shape[0] == 0:
             print('skipping pull because everything is ignored')
-            return embedding.new_zeros(1)
+            return embedding.new_zeros(1)[0]
         return (weights * self.pull_loss_func(
             F.relu(self.pull_distance_measure(embedding, centroids, dim=1) - self.pull_margin)
         )).sum()
