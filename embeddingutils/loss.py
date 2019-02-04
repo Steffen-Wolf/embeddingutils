@@ -220,7 +220,9 @@ class LossSegmentwiseFreeTags(WeightedLoss):
             n_comparisons = 0.5 * (n_segments-1) * n_segments
             return 0 if n_comparisons == 0 else n_comparisons ** -0.5
         if self.push_weighting == 'per_pixel':
-            return segment_sizes ** 0.5
+            # return segment_sizes ** 0.5
+            n_comparisons = 0.5 * (n_segments-1) * n_segments
+            return segment_sizes * n_active_pixels ** -0.5 * n_comparisons ** -0.5
         assert False, 'push weighting not understood'
 
     def get_pull_weights(self, segment_sizes, n_segments, n_pixels, n_active_pixels):
@@ -325,7 +327,7 @@ class LossSegmentwiseFreeTags(WeightedLoss):
             push = self.push_loss(centroids, weights=push_weights)
             pushes.append(push)
 
-            # pull loss, scale with mask ratio to avoid gradient spikes
+            # pull loss
             pixel_wise_centroids = centroids[:, :, gt_seg]
             pull_weights = self.get_pull_weights(**weighting_info)
             pull = self.pull_loss(embeddings, pixel_wise_centroids, weights=pull_weights)
