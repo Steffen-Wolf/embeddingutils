@@ -106,8 +106,11 @@ class SumLoss(WeightedLoss):
         'mean': 'grad-mean_',
     }
 
-    def __init__(self, losses, grad_stats=None, **super_kwargs):
-        super(SumLoss, self).__init__(**super_kwargs)
+    def __init__(self, losses, ignore_weight_zero=True, grad_stats=None, loss_weights=None, **super_kwargs):
+        assert isinstance(losses, collections.Iterable)
+        if ignore_weight_zero and isinstance(loss_weights, collections.Iterable):
+            losses, loss_weights = list(zip(*((l, w) for l, w in zip(losses, loss_weights) if w != 0)))
+        super(SumLoss, self).__init__(loss_weights=loss_weights, **super_kwargs)
         assert isinstance(losses, collections.Iterable)
         self.losses = losses
         self.grad_stats = grad_stats
