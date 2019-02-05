@@ -222,7 +222,7 @@ class LossSegmentwiseFreeTags(WeightedLoss):
         if self.push_weighting == 'per_pixel':
             # return segment_sizes ** 0.5
             n_comparisons = 0.5 * (n_segments-1) * n_segments
-            return segment_sizes * n_active_pixels ** -0.5 * n_comparisons ** -0.5
+            return segment_sizes * max(1, n_active_pixels * n_comparisons) ** -0.5
         assert False, 'push weighting not understood'
 
     def get_pull_weights(self, segment_sizes, n_segments, n_pixels, n_active_pixels):
@@ -235,7 +235,7 @@ class LossSegmentwiseFreeTags(WeightedLoss):
             )
         if self.pull_weighting == 'vanilla':
             # behaviour as previous to refactor of this loss
-            return 1 / n_active_pixels
+            return 1 / max(1, n_active_pixels)
         if self.pull_weighting == 'per_pixel':
             # constant gradient per pixel independent of segment size is equivalent to weighting the means with
             # segment size.
