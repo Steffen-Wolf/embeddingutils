@@ -106,11 +106,14 @@ class SumLoss(WeightedLoss):
         'mean': 'grad-mean_',
     }
 
-    def __init__(self, losses, ignore_weight_zero=True, grad_stats=None, loss_weights=None, **super_kwargs):
+    def __init__(self, losses, ignore_weight_zero=True, grad_stats=None, loss_weights=None, loss_names=None,
+                 **super_kwargs):
         assert isinstance(losses, collections.Iterable)
-        if ignore_weight_zero and isinstance(loss_weights, collections.Iterable):
-            losses, loss_weights = list(zip(*((l, w) for l, w in zip(losses, loss_weights) if w != 0)))
-        super(SumLoss, self).__init__(loss_weights=loss_weights, **super_kwargs)
+        if ignore_weight_zero and isinstance(loss_weights, (list, tuple)):
+            ind = np.array([i for i, w in enumerate(loss_weights) if w != 0])
+            losses, loss_weights, loss_names = [[obj[i] for i in ind] if isinstance(obj, (list, tuple)) else obj
+                                                for obj in (losses, loss_weights, loss_names)]
+        super(SumLoss, self).__init__(loss_weights=loss_weights, loss_names=loss_names, **super_kwargs)
         assert isinstance(losses, collections.Iterable)
         self.losses = losses
         self.grad_stats = grad_stats
