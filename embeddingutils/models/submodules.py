@@ -1,3 +1,4 @@
+from embeddingutils.affinities import offset_slice, offset_padding, get_offsets
 from inferno.extensions.layers.convolutional import ConvELU3D
 
 import torch
@@ -229,7 +230,73 @@ class Upsample(nn.Module):
         return nn.functional.interpolate(input, scale_factor=self.scale_factor, mode=self.mode)
 
 
+class AffinityBasedAveraging(torch.nn.Module):
+    def __init__(self, offsets, extra_dims=2, softmax=True, **pad_kwargs):
+        super(AffinityBasedAveraging, self).__init__()
+        self.pad_kwargs = dict(mode='replicate', **pad_kwargs)
+        self.offsets = get_offsets(offsets)
+        self.offset_slices = [offset_slice(off, extra_dims=extra_dims) for off in self.offsets]
+        self.offset_padding = [offset_padding(off) for off in self.offsets]
+        self.use_softmax = softmax
+
+    def forward(self, affinities, embedding):
+        padded_embeddings = []
+        for sl, pad in zip(self.offset_slices, self.offset_padding):
+            padded_embeddings.append(F.pad(embedding[sl], pad, **self.pad_kwargs))
+        padded_embeddings = torch.stack(padded_embeddings, dim=1)
+        if self.use_softmax:
+            affinities = F.softmax(affinities, dim=1)
+        return (padded_embeddings * affinities[:, :, None]).sum(1)
+
+
+class HierarchicalAffinityAveraging(torch.nn.Module):
+    def __init__(self, levels=2, dim=2, stride=1, append_affinities=False, ignore_n_first_channels=0, **kwargs):
+        """ averages iteratively with thrice as long offsets in every level """
+        super(HierarchicalAffinityAveraging, self).__init__()
+
+        self.base_neighborhood = stride * np.mgrid[dim*(slice(-1, 2),)].reshape(dim, -1).transpose()
+        self.stages = nn.ModuleList([AffinityBasedAveraging(dim**i * self.base_neighborhood, **kwargs)
+                                     for i in range(levels)])
+        self.levels = levels
+        self.dim = dim
+        self.append_affinities = append_affinities
+        self.ignore_n_first_channels = ignore_n_first_channels
+
+    def forward(self, input):
+        ignored = input[:, :self.ignore_n_first_channels]
+        input = input[:, self.ignore_n_first_channels:]
+
+        affinity_groups = input[:, :len(self.base_neighborhood) * self.levels]
+        affinity_groups = affinity_groups.reshape(
+            input.size(0), self.levels, len(self.base_neighborhood), *input.shape[2:])\
+            .permute(1, 0, *range(2, 3 + self.dim))
+        embedding = input[:, len(self.base_neighborhood) * self.levels:]
+        for affinities, stage in zip(affinity_groups, self.stages):
+            embedding = stage(affinities, embedding)
+        return torch.cat([ignored, embedding], 1)
+
+
 if __name__ == '__main__':
+
+    model = AffinityBasedAveraging(offsets=np.array([[0, 1], [1, 0]]))
+    emb = torch.tensor([[[
+        [0, 1],
+        [2, 3]
+    ]]]).float()
+    aff = torch.tensor([[
+        [[-10, 0],
+         [0, 0]],
+        [[0, 0],
+         [0, 0]],
+    ]]).float()
+    print(emb.shape)
+    print(aff.shape)
+    out = model(aff, emb)
+    print('out: ', out)
+    print(out.shape)
+
+    assert False
+
 
     from inferno.extensions.layers.convolutional import ConvELU2D, Conv2D, BNReLUConv2D
 
