@@ -103,6 +103,14 @@ def get_offsets(offsets):
                                 [-9, -9], [9, -9],
                                 [-9, -4], [-4, -9], [4, -9], [9, -4],
                                 [-27, 0], [0, -27]], int)
+        elif offsets == 'tracking-long-2D':
+            offsets = np.array([[-1, 0, 0], [-2, 0, 0],
+                                [0, -9, 0], [0, 0, -9], [0, -9, -9], [0, 9, -9],
+                                [-1, -9, 4], [-1, -4, -9], [-1, 4, -9], [-1, 9, -4],
+                                [0, -9, 0], [0, 0, -9],
+                                [0, -9, -9], [0, 9, -9],
+                                [0, -9, -4], [0, -4, -9], [0, 4, -9], [0, 9, -4],
+                                [0, -27, 0], [0, 0, -27]], int)
         elif offsets == 'default-2D-in-3D':
             offsets = get_offsets('default-2D')
             offsets = np.concatenate([np.zeros((len(offsets), 1)), offsets], axis=-1)
