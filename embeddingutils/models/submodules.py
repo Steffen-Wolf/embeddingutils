@@ -1,12 +1,16 @@
 from embeddingutils.affinities import offset_slice, offset_padding, get_offsets
 from inferno.extensions.layers.convolutional import ConvELU3D
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
 from torch import cat
 import numpy as np
+try:
+    from speedrun.log_anywhere import log_image
+except ImportError:
+    def log_image(tag, value):
+        assert False, f'Image logging cannot be used without speedrun.'
 
 
 class DepthToChannel(nn.Module):
@@ -231,13 +235,20 @@ class Upsample(nn.Module):
 
 
 class AffinityBasedAveraging(torch.nn.Module):
-    def __init__(self, offsets, extra_dims=2, softmax=True, **pad_kwargs):
+    def __init__(self, offsets, extra_dims=2, softmax=True, activation=None, normalize=True, **pad_kwargs):
         super(AffinityBasedAveraging, self).__init__()
         self.pad_kwargs = dict(mode='replicate', **pad_kwargs)
         self.offsets = get_offsets(offsets)
         self.offset_slices = [offset_slice(off, extra_dims=extra_dims) for off in self.offsets]
+        self.reverse_offset_slices = [offset_slice(-off, extra_dims=extra_dims) for off in self.offsets]
         self.offset_padding = [offset_padding(off) for off in self.offsets]
         self.use_softmax = softmax
+        if self.use_softmax:
+            assert activation is None, f'activation function is overriden by using softmax!'
+        if isinstance(activation, str):
+            activation = getattr(torch.nn, activation)()
+        self.activation = activation
+        self.normalize = normalize
 
     def forward(self, affinities, embedding):
         padded_embeddings = []
@@ -246,21 +257,28 @@ class AffinityBasedAveraging(torch.nn.Module):
         padded_embeddings = torch.stack(padded_embeddings, dim=1)
         if self.use_softmax:
             affinities = F.softmax(affinities, dim=1)
+        elif hasattr(self, 'activation') and self.activation:
+            affinities = self.activation(affinities)
+        if hasattr(self, 'normalize') and self.normalize:
+            affinities = F.normalize(affinities, dim=1, p=1)
+        counts = affinities.new_zeros((affinities.shape[0], 1) + affinities.shape[2:])
         return (padded_embeddings * affinities[:, :, None]).sum(1)
 
 
 class HierarchicalAffinityAveraging(torch.nn.Module):
-    def __init__(self, levels=2, dim=2, stride=1, append_affinities=False, ignore_n_first_channels=0, **kwargs):
+    def __init__(self, levels=2, dim=2, stride=1, append_affinities=False, ignore_n_first_channels=0, log_images=False,
+                 **kwargs):
         """ averages iteratively with thrice as long offsets in every level """
         super(HierarchicalAffinityAveraging, self).__init__()
 
         self.base_neighborhood = stride * np.mgrid[dim*(slice(-1, 2),)].reshape(dim, -1).transpose()
-        self.stages = nn.ModuleList([AffinityBasedAveraging(dim**i * self.base_neighborhood, **kwargs)
+        self.stages = nn.ModuleList([AffinityBasedAveraging(3**i * self.base_neighborhood, **kwargs)
                                      for i in range(levels)])
         self.levels = levels
         self.dim = dim
         self.append_affinities = append_affinities
         self.ignore_n_first_channels = ignore_n_first_channels
+        self.log_images = log_images
 
     def forward(self, input):
         ignored = input[:, :self.ignore_n_first_channels]
@@ -271,7 +289,10 @@ class HierarchicalAffinityAveraging(torch.nn.Module):
             input.size(0), self.levels, len(self.base_neighborhood), *input.shape[2:])\
             .permute(1, 0, *range(2, 3 + self.dim))
         embedding = input[:, len(self.base_neighborhood) * self.levels:]
-        for affinities, stage in zip(affinity_groups, self.stages):
+        for i, (affinities, stage) in enumerate(zip(affinity_groups, self.stages)):
+            if self.log_images:
+                log_image(f'embedding_stage_{i}', embedding)
+                log_image(f'affinities_stage_{i}', affinities)
             embedding = stage(affinities, embedding)
         return torch.cat([ignored, embedding], 1)
 
