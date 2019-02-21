@@ -148,15 +148,26 @@ class SumLoss(WeightedLoss):
         self.hook_handle.remove()
 
     def get_losses(self, preds, labels):
-        result = []
-        if self.grad_stats is None or not self.trainer.model.training:
-            for loss in self.losses:
-                result.append(loss(preds, labels))
+        if isinstance(labels, (list, tuple)):
+            # apply the list of losses to the list of predictions
+            assert len(labels) == len(self.losses)
+            label_per_loss = labels
+        else:
+            label_per_loss = [labels] * len(self.losses)
+
+        if isinstance(preds, (list, tuple)):
+            # apply the list of losses to the list of predictions
+            assert len(preds) == len(self.losses)
+            pred_per_loss = preds
+        elif self.grad_stats is None or not self.trainer.model.training:
+            pred_per_loss = [preds] * len(self.losses)
         else:
             pred_per_loss = preds[None].repeat(self.n_losses, *((1,) * len(preds.shape)))
             self.hook_handle = pred_per_loss.register_hook(self.hook)
-            for pred, loss in zip(pred_per_loss, self.losses):
-                result.append(loss(pred, labels))
+
+        result = []
+        for pred, labels, loss in zip(pred_per_loss, label_per_loss, self.losses):
+            result.append(loss(pred, labels))
         return result
 
 
