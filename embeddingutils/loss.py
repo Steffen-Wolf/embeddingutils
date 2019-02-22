@@ -107,6 +107,7 @@ class SumLoss(WeightedLoss):
     }
 
     def __init__(self, losses, ignore_weight_zero=True, grad_stats=None, loss_weights=None, loss_names=None,
+                 split_pred='auto', split_target='auto',
                  **super_kwargs):
         assert isinstance(losses, collections.Iterable)
         if ignore_weight_zero and isinstance(loss_weights, (list, tuple)):
@@ -114,13 +115,15 @@ class SumLoss(WeightedLoss):
             losses, loss_weights, loss_names = [[obj[i] for i in ind] if isinstance(obj, (list, tuple)) else obj
                                                 for obj in (losses, loss_weights, loss_names)]
         super(SumLoss, self).__init__(loss_weights=loss_weights, loss_names=loss_names, **super_kwargs)
-        assert isinstance(losses, collections.Iterable)
+        assert isinstance(losses, collections.Sized)
         self.losses = losses
         self.grad_stats = grad_stats
         assert grad_stats is None or all(stat in self.GRAD_PREFIX for stat in grad_stats), \
             f'Supported stats: {list(self.GRAD_PREFIX.keys())}. Got {grad_stats}'
         if self.grad_stats is not None:
             assert self.trainer is not None
+        self.split_pred = split_pred
+        self.split_target = split_target
         self.hook_handle = None
 
     def save_grad_stats(self, stat_name, values):
@@ -148,14 +151,17 @@ class SumLoss(WeightedLoss):
         self.hook_handle.remove()
 
     def get_losses(self, preds, labels):
-        if isinstance(labels, (list, tuple)):
+
+        split_target = isinstance(labels, (list, tuple)) if self.split_target is 'auto' else self.split_pred
+        if split_target:
             # apply the list of losses to the list of predictions
             assert len(labels) == len(self.losses)
             label_per_loss = labels
         else:
             label_per_loss = [labels] * len(self.losses)
 
-        if isinstance(preds, (list, tuple)):
+        split_pred = isinstance(preds, (list, tuple)) if self.split_pred is 'auto' else self.split_pred
+        if split_pred:
             # apply the list of losses to the list of predictions
             assert len(preds) == len(self.losses)
             pred_per_loss = preds
