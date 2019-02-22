@@ -24,10 +24,20 @@ class DepthToChannel(nn.Module):
 class Normalize(nn.Module):
     def __init__(self, dim=1):
         super(Normalize, self).__init__()
-        self.dim=dim
+        self.dim = dim
 
     def forward(self, input_):
         return F.normalize(input_, dim=self.dim)
+
+
+class NormalizeWholeTensor(torch.nn.Module):
+    def __init__(self, mean=0, std=1):
+        super(NormalizeWholeTensor, self).__init__()
+        self.mean = mean
+        self.std = std
+
+    def forward(self, input):
+        return F.normalize(input.view(input.shape[0], -1), dim=1).view(input.shape)
 
 
 class ResBlock(nn.Module):
