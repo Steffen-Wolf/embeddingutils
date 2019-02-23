@@ -7,6 +7,7 @@ class Segmentation2AffinitiesWithPadding(Transform):
 
     def __init__(self, offsets,
                  segmentation_to_binary=True,
+                 invert_binary_segmentation=True,
                  ignore_label=-1,
                  retain_segmentation=True,
                  **super_kwargs):
@@ -14,6 +15,7 @@ class Segmentation2AffinitiesWithPadding(Transform):
         self.ignore_label = ignore_label
         self.retain_segmentation = retain_segmentation
         self.segmentation_to_binary = segmentation_to_binary
+        self.invert_binary_segmentation = invert_binary_segmentation
 
         super().__init__(**super_kwargs)
 
@@ -26,12 +28,15 @@ class Segmentation2AffinitiesWithPadding(Transform):
                                       affinity_measure=label_equal_similarity_with_mask_le)
 
         if self.segmentation_to_binary:
-            binary_seg = (ttensor > 0).float()
+            if self.invert_binary_segmentation:
+                binary_seg = (ttensor <= 0).float()
+            else:
+                binary_seg = (ttensor > 0).float()
+
             if self.ignore_label is not None:
                 binary_seg[ttensor == self.ignore_label] = -1
 
             out = torch.cat((binary_seg.float(), out))
-
 
         if self.retain_segmentation:
             out = torch.cat((ttensor.float(), out))
