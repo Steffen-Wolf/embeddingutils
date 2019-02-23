@@ -12,7 +12,7 @@ def label_equal_similarity(x, y, dim=0):
 def ignore_label_mask_similarity(x, y, dim=0, ignore_label=0):
     # returns a mask that is 0 where x or y is to be ignored
     assert x.shape[dim] == 1, 'label images should have one channel only'
-    return (torch.stack([x != ignore_label, y != ignore_label], dim=0)).min(dim=0)[0].squeeze(dim=dim).byte()
+    return ((x != ignore_label) * (y != ignore_label)).squeeze(dim=dim)
 
 def label_equal_similarity_with_mask(x, y, dim=0, ignore_label=-1):
     assert x.shape[dim] == 1, 'label images should have one channel only'
