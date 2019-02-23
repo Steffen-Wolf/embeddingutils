@@ -48,8 +48,7 @@ def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_
         affinities[:, :ATT_C] += 1
     affinities[:, :ATT_C] *= attraction_factor
     if z_delay != 0:
-        affinities[:, (offsets[:, 0]!=0).astype(np.uint8)] += z_delay
-
+        affinities[:, (offsets[:, 0] != 0).astype(np.uint8)] += z_delay
 
     result = []
     for aff in affinities:
@@ -60,10 +59,10 @@ def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_
         sorted_edges = np.argsort(aff, axis=None)
         dws.repulsive_ucc_mst_cut(sorted_edges, 0)
         seg = label(dws.get_flat_label_image().reshape(img_shape))
-        seg = np.random.permutation(seg.max()+1)[seg]
+        seg = np.random.permutation(seg.max() + 1)[seg]
         result.append(seg)
 
-    result = np.stack(result, axis=-(n_img_dims+1)).reshape(emb_shape[:-n_img_dims-1] + emb_shape[-n_img_dims:])
+    result = np.stack(result, axis=-(n_img_dims + 1)).reshape(emb_shape[:-n_img_dims - 1] + emb_shape[-n_img_dims:])
 
     if return_affinities:
         return torch.from_numpy(result), affinities
@@ -136,7 +135,7 @@ def _append_coords(embedding, coord_scales):
 
     coord_axes = []
     for i, scale in enumerate(coord_scales):
-        coord_axes.append(np.linspace(0, (img_shape[i]-1) * scale, img_shape[i], dtype=np.float32))
+        coord_axes.append(np.linspace(0, (img_shape[i] - 1) * scale, img_shape[i], dtype=np.float32))
     coord_mesh = np.stack(np.meshgrid(*coord_axes), axis=-1).reshape(n_pixels, -1)[None].repeat(embedding.shape[0], 0)
     embedding = torch.cat([torch.from_numpy(coord_mesh).type(embedding.dtype), embedding], dim=-1)
 
@@ -168,7 +167,7 @@ def hdbscan_segmentation(embedding, n_img_dims=None, coord_scales=None,
         n_pixels *= s
 
     # reshape embedding for clustering
-    embedding = embedding.contiguous().view(-1, embedding.shape[-n_img_dims-1], n_pixels).permute(0, 2, 1)
+    embedding = embedding.contiguous().view(-1, embedding.shape[-n_img_dims - 1], n_pixels).permute(0, 2, 1)
 
     # init HDBSCAN clusterer
     clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, metric=metric, **hdbscan_kwargs)
