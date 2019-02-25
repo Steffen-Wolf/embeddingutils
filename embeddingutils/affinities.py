@@ -25,9 +25,10 @@ def label_equal_similarity_with_mask_le(x, y, dim=0, ignore_label_le=-1):
     # this should be a faster implementation in case all labels smaller 
     # than ignore_label_le should be ignored
     assert x.shape[dim] == 1, 'label images should have one channel only'
-    aff = ((x == y).squeeze(dim=dim))
-    aff[x.min(y).le_(ignore_label_le)] = -1
-    return aff
+    aff = ((x == y)).float()
+    mask = x.min(y).le(ignore_label_le)
+    aff[mask] = -1
+    return aff.squeeze(dim=dim)
 
 def euclidean_distance(x, y, dim=0):
     return (x - y).norm(p=2, dim=dim)
