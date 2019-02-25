@@ -34,8 +34,8 @@ def get_per_channel_mapping(offsets, pred_aff, gt_aff=None, gt_seg=None, ignore_
     if gt_aff is None:
         # derive gt affinities from segmentation
         assert gt_seg is not None
-        gt_aff = np.asarray([embedding_to_affinities(torch.from_numpy(seg), offsets, label_equal_similarity)
-                             for seg in gt_seg])
+        gt_aff = [np.asarray(embedding_to_affinities(torch.from_numpy(seg), offsets, label_equal_similarity))
+                             for seg in gt_seg]
 
     ignore_mask = None
     if ignore_label is not None:
@@ -46,7 +46,7 @@ def get_per_channel_mapping(offsets, pred_aff, gt_aff=None, gt_seg=None, ignore_
             for seg in gt_seg]
 
     assert len(offsets) == pred_aff[0].shape[0]
-    assert pred_aff.shape == gt_aff.shape
+    assert all(pred.shape == gt.shape for pred, gt in zip(pred_aff, gt_aff))
     mappings = []
     for i, offset in enumerate(offsets):
         print(f'Computing mapping for offset {offset}')
