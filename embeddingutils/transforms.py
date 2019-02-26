@@ -1,7 +1,8 @@
 import torch
 from inferno.io.transform import Transform
 import torch
-from embeddingutils.affinities import embedding_to_affinities, label_equal_similarity_with_mask_le
+from embeddingutils.affinities import embedding_to_affinities, label_equal_similarity_with_mask_le, label_equal_similarity_with_mask_max_le
+
 
 class Segmentation2AffinitiesWithPadding(Transform):
 
@@ -23,9 +24,13 @@ class Segmentation2AffinitiesWithPadding(Transform):
 
         ttensor = torch.from_numpy(tensor[None])
 
+        def am(e1, e2, dim=0):
+            return label_equal_similarity_with_mask_le(e1, e2, ignore_label_le=self.ignore_label)
+
         out = embedding_to_affinities(ttensor,
                                       offsets=self.offsets,
-                                      affinity_measure=label_equal_similarity_with_mask_le)
+                                      affinity_measure=am,
+                                      pad_val=self.ignore_label)
 
         if self.segmentation_to_binary:
             if self.invert_binary_segmentation:
@@ -60,4 +65,4 @@ class MaskToIgnoreLabel(Transform):
 
         # Mask prediction with master mask
         masked_prediction = prediction * full_mask_variable
-        return masked_prediction, target
+        return masked_prediction, target * full_mask_variable
