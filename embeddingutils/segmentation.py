@@ -2,20 +2,29 @@ import torch
 from torch.nn.functional import cosine_similarity
 from skimage.measure import label
 import numpy as np
-import hdbscan
 import collections
 from embeddingutils.affinities import embedding_to_affinities, get_offsets, logistic_similarity
+
+try:
+    import hdbscan
+except ImportError:
+    hdbscan = None
+
 try:
     from affogato.segmentation import compute_mws_clustering
+except ImportError:
+    compute_mws_clustering = None
+
+try:
     import constrained_mst as cmst
-    WITH_MWS = True
-except:
-    WITH_MWS = False
+except ImportError:
+    constrained_mst = None
 
 
 def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_similarity, pass_offset=False,
                      ATT_C=None, repulsive_strides=None, percentile=5, return_affinities=False,
                      attraction_factor=1, z_delay=0):
+    assert cmst is not None, 'need constrained_mst for mws_segmentation'
 
     offsets = get_offsets(offsets)
     if ATT_C is None:
@@ -72,6 +81,7 @@ def mws_segmentation(embedding, offsets='default-3D', affinity_measure=logistic_
 
 def nonlocal_mws_segmentation(att_aff, offsets,
                               mutex_edges, mutex_edge_weights):
+    assert compute_mws_clustering is not None, 'need compute_mws_clustering for nonlocal_mws_segmentation'
 
     # determine the strides of the image
     shape = att_aff.shape[1:]
@@ -147,6 +157,7 @@ def _append_coords(embedding, coord_scales):
 
 def hdbscan_segmentation(embedding, n_img_dims=None, coord_scales=None,
                          metric='euclidean', min_cluster_size=50, **hdbscan_kwargs):
+    assert hdbscan is not None, 'need hdbscan for hdbscan_segmentation'
     assert metric in hdbscan.dist_metrics.METRIC_MAPPING
     if n_img_dims is None:
         # default: assume one embedding image is being passed
