@@ -333,7 +333,6 @@ class LossSegmentwiseFreeTags(WeightedLoss):
                 embeddings = embeddings[:, :, mask]
                 weighting_info['n_active_pixels'] = mask.long().sum().item()
             weighting_info['n_segments'] = n_segments
-
             # calculate centroids and segment sizes of the individual segments
             centroids = []
             segment_sizes = []
@@ -341,6 +340,11 @@ class LossSegmentwiseFreeTags(WeightedLoss):
                 segment_mask = gt_seg == seg_id
                 segment_sizes.append(segment_mask.float().sum())
                 centroids.append(embeddings[:, :, segment_mask].mean(-1))
+            if not centroids:  # no segments present
+                pushes.append(embeddings.new_zeros(1)[0])
+                pulls.append(embeddings.new_zeros(1)[0])
+                print('skipping: no segments present')
+                continue
             centroids = torch.stack(centroids, dim=-1)
             segment_sizes = torch.stack(segment_sizes)
             weighting_info['segment_sizes'] = segment_sizes

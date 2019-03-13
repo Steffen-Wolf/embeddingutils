@@ -284,6 +284,39 @@ class ShakeShakeSNEMINet(SuperhumanSNEMINet):
         return ShakeShakeMerge()
 
 
+class IsotropicSuperhumanSNEMINet(SuperhumanSNEMINet):
+
+    def construct_encoder_module(self, depth):
+        f_in = self.fmaps[depth - 1] if depth != 0 else self.in_channels
+        f_out = self.fmaps[depth]
+        if depth != 0:
+            return SuperhumanSNEMIBlock(f_in=f_in, f_out=f_out, conv_type=self.conv_type,
+                                        pre_kernel_size=(3, 3, 3), inner_kernel_size=(3, 3, 3))
+        if depth == 0:
+            return SuperhumanSNEMIBlock(f_in=f_in, f_out=f_out, conv_type=self.conv_type,
+                                        pre_kernel_size=(5, 5, 5), inner_kernel_size=(3, 3, 3))
+
+    def construct_decoder_module(self, depth):
+        f_in = self.fmaps[depth]
+        f_out = self.fmaps[0] if depth == 0 else self.fmaps[depth - 1]
+        if depth != 0:
+            return SuperhumanSNEMIBlock(f_in=f_in, f_out=f_out, conv_type=self.conv_type,
+                                        pre_kernel_size=(3, 3, 3), inner_kernel_size=(3, 3, 3))
+        if depth == 0:
+            return nn.Sequential(
+                SuperhumanSNEMIBlock(f_in=f_in, f_out=f_out, conv_type=self.conv_type,
+                                     pre_kernel_size=(3, 3, 3), inner_kernel_size=(3, 3, 3)),
+                self.conv_type(f_out, self.out_channels, kernel_size=(5, 5, 5))
+            )
+
+    def construct_base_module(self):
+        f_in = self.fmaps[self.depth - 1]
+        f_intermediate = self.fmaps[self.depth]
+        f_out = self.fmaps[self.depth - 1]
+        return SuperhumanSNEMIBlock(f_in=f_in, f_main=f_intermediate, f_out=f_out, conv_type=self.conv_type,
+                                    pre_kernel_size=(3, 3, 3), inner_kernel_size=(3, 3, 3))
+
+
 class UNet2D(UNet3D):
 
     def __init__(self,

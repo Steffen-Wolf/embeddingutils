@@ -40,6 +40,7 @@ def get_per_channel_mapping(offsets, pred_aff, gt_aff=None, gt_seg=None, ignore_
     ignore_mask = None
     if ignore_label is not None:
         assert gt_seg is not None
+        assert ignore_label == 0, f'ignore label other than 0 is not supported.'
         # compute ignore masks
         ignore_mask = [np.asarray(embedding_to_affinities(
             torch.from_numpy(seg.astype(np.int32)), offsets, ignore_label_mask_similarity)).astype(np.bool)

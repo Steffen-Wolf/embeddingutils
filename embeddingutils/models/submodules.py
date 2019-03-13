@@ -24,36 +24,54 @@ class DepthToChannel(nn.Module):
 class Normalize(nn.Module):
     def __init__(self, dim=1):
         super(Normalize, self).__init__()
-        self.dim = dim
+        self.dim=dim
 
     def forward(self, input_):
         return F.normalize(input_, dim=self.dim)
 
 
-class NormalizeWholeTensor(torch.nn.Module):
-    def __init__(self, mean=0, std=1):
-        super(NormalizeWholeTensor, self).__init__()
-        self.mean = mean
-        self.std = std
-
-    def forward(self, input):
-        return F.normalize(input.view(input.shape[0], -1), dim=1).view(input.shape)
-
-
 class ResBlock(nn.Module):
-    def __init__(self, inner, pre=None, post=None):
+    def __init__(self, inner, pre=None, post=None, outer=None):
         super(ResBlock, self).__init__()
         self.inner = inner
         self.pre = pre
         self.post = post
+        self.outer = outer
 
     def forward(self, x):
         if self.pre is not None:
             x = self.pre(x)
-        x = x + self.inner(x)
+        if hasattr(self, 'outer') and self.outer is not None:
+            skip = self.outer(x)
+        else:
+            skip = x
+        x = skip + self.inner(x)
         if self.post is not None:
             x = self.post(x)
         return x
+
+
+class ValidPadResBlock(ResBlock):
+    def __init__(self, f_in, f_main=None, kernel_size=1, conv_type=nn.Conv3d, activation='ELU'):
+        f_main = f_in if f_main is None else f_main
+        if isinstance(activation, str):
+            activation = getattr(torch.nn, activation)()
+        inner = nn.Sequential(
+            conv_type(f_in, f_main, kernel_size=1),
+            activation,
+            conv_type(f_main, f_main, kernel_size=kernel_size, padding=0),
+            activation,
+            conv_type(f_main, f_in, kernel_size=1),
+        )
+        self.crop = (kernel_size - 1)//2
+        super(ValidPadResBlock, self).__init__(inner=inner, outer=self.outer)
+
+    def outer(self, x):
+        crop = self.crop
+        if crop == 0:
+            return x
+        else:
+            return x[:, :, slice(crop, -crop), slice(crop, -crop), slice(crop, -crop)]
 
 
 class SuperhumanSNEMIBlock(ResBlock):
