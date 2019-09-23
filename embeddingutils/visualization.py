@@ -1,9 +1,10 @@
 import torch
 import numpy as np
 from sklearn.decomposition import PCA
+from copy import deepcopy
 
 
-def pca(embedding, output_dimensions=3, reference=None, center_data=False):
+def pca(embedding, output_dimensions=3, reference=None, center_data=False, return_pca_objects=False):
     # embedding shape: first two dimensions corresponde to batchsize and embedding dim, so
     # shape should be (B, E, H, W) or (B, E, D, H, W).
     _pca = PCA(n_components=output_dimensions)
@@ -25,13 +26,20 @@ def pca(embedding, output_dimensions=3, reference=None, center_data=False):
         flat_embedding -= means
 
     pca_output = []
+    pca_objects = []
     for flat_reference, flat_image in zip(flat_reference, flat_embedding):
         # fit PCA to array of shape (n_samples, n_features)..
         _pca.fit(flat_reference)
         # ..and apply to input data
         pca_output.append(_pca.transform(flat_image))
+        if return_pca_objects:
+            pca_objects.append(deepcopy(_pca))
+    transformed = torch.stack([torch.from_numpy(x.T) for x in pca_output]).reshape(output_shape)
+    if not return_pca_objects:
+        return transformed
+    else:
+        return transformed, pca_objects
 
-    return torch.stack([torch.from_numpy(x.T) for x in pca_output]).reshape(output_shape)
 
 if __name__ == '__main__':
     print(pca(torch.rand(2, 64, 20, 100, 100)).shape)
