@@ -321,6 +321,7 @@ class HierarchicalAffinityAveraging(torch.nn.Module):
             if self.log_images:
                 log_image(f'embedding_stage_{i}', embedding)
                 log_image(f'affinities_stage_{i}', affinities)
+
             embedding = stage(affinities, embedding)
         return torch.cat([ignored, embedding], 1)
 

@@ -214,9 +214,10 @@ class UNet3D(UNetSkeleton):
         return sampler
 
     def forward(self, input_):
-        # input_dim = len(input_.shape)
-        # assert all(input_.shape[-i] % self.divisibility_constraint[-i] == 0 for i in range(1, input_dim-1)), \
-            # f'Volume dimensions {input_.shape[2:]} are not divisible by {self.divisibility_constraint}'
+        input_dim = len(input_.shape)
+        assert all(input_.shape[-i] % self.divisibility_constraint[-i] == 0 for i in range(1, input_dim-1)), \
+            f'Input shape {input_.shape[2:]} not suited for downsampling with factors {self.scale_factors}.' \
+            f'Lengths of spatial axes must be multiples of {self.divisibility_constraint}.'
         return super(UNet3D, self).forward(input_)
 
 
