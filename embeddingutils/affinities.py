@@ -18,16 +18,42 @@ def label_equal_similarity_with_mask(x, y, dim=0, ignore_label=-1):
     assert x.shape[dim] == 1, 'label images should have one channel only'
     aff = ((x == y).squeeze(dim=dim))
     ignore_mask = (x == ignore_label).add_(y == ignore_label).ge_(1)
-    aff[ignore_mask] = -1
+    aff[ignore_mask] = ignore_label
     return aff
 
 def label_equal_similarity_with_mask_le(x, y, dim=0, ignore_label_le=-1):
-    # this should be a faster implementation in case all labels smaller 
+    # this should be a faster implementation in case where all labels smaller 
     # than ignore_label_le should be ignored
     assert x.shape[dim] == 1, 'label images should have one channel only'
     aff = ((x == y)).float()
-    mask = x.min(y).le(ignore_label_le)
-    aff[mask] = -1
+    
+    if ignore_label_le == -1:
+        mask = x.min(y).gt_(ignore_label_le).float()
+        aff.add_(1).mul_(mask).add_(-1)
+    elif ignore_label_le == 0:
+        mask = x.min(y).gt_(ignore_label_le).float()
+        aff.mul_(mask)
+    else:
+        mask = x.min(y).le_(ignore_label_le)
+        aff[mask] = -1
+    return aff.squeeze(dim=dim)
+
+
+def label_equal_similarity_with_mask_max_le(x, y, dim=0, ignore_label_le=-1):
+    # This is a specialized implementation that masks only edges
+    # where both incident nodes have a label less or equal to ignore_label_le
+    assert x.shape[dim] == 1, 'label images should have one channel only'
+    aff = ((x == y)).float()
+    
+    if ignore_label_le == -1:
+        mask = x.max(y).gt_(ignore_label_le).float()
+        aff.add_(1).mul_(mask).add_(-1)
+    elif ignore_label_le == 0:
+        mask = x.max(y).gt_(ignore_label_le).float()
+        aff.mul_(mask)
+    else:
+        mask = x.max(y).le_(ignore_label_le)
+        aff[mask] = ignore_label_le
     return aff.squeeze(dim=dim)
 
 def euclidean_distance(x, y, dim=0):
@@ -138,7 +164,8 @@ def get_offsets(offsets):
     return offsets if isinstance(offsets, np.ndarray) else np.array(offsets, int)
 
 
-def embedding_to_affinities(emb, offsets='default-3D', affinity_measure=euclidean_distance, pass_offset=False):
+def embedding_to_affinities(emb, offsets='default-3D', affinity_measure=euclidean_distance,
+                            pass_offset=False, pad_val=1.):
     # if len(emb.shape) = n + 1 + len(offsets[0]):
     # function is parallel over first n dimensions
     # the (n+1)th dimension is assumed to be embedding dimenstion
@@ -159,7 +186,7 @@ def embedding_to_affinities(emb, offsets='default-3D', affinity_measure=euclidea
                 aff = affinity_measure(emb[s1], emb[s2], dim=emb_axis)
             else:
                 aff = affinity_measure(emb[s1], emb[s2], dim=emb_axis, offset=off)
-            aff = F.pad(aff, offset_padding(off), value=1.)
+            aff = F.pad(aff, offset_padding(off), value=pad_val)
         else:
             print('warning: offset bigger than image')
             aff = torch.zeros(emb.shape[:emb_axis] + emb.shape[emb_axis+1:]).to(emb.device)
