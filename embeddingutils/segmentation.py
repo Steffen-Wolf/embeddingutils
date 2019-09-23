@@ -156,7 +156,7 @@ def _append_coords(embedding, coord_scales):
 
 
 def hdbscan_segmentation(embedding, n_img_dims=None, coord_scales=None,
-                         metric='euclidean', min_cluster_size=50, **hdbscan_kwargs):
+                         metric='euclidean', min_cluster_size=50, slice_for_fit=None, **hdbscan_kwargs):
     assert hdbscan is not None, 'need hdbscan for hdbscan_segmentation'
     assert metric in hdbscan.dist_metrics.METRIC_MAPPING
     if n_img_dims is None:
@@ -186,7 +186,13 @@ def hdbscan_segmentation(embedding, n_img_dims=None, coord_scales=None,
     # iterate over images in batch
     result = []
     for emb in embedding:
-        labels = clusterer.fit_predict(emb).reshape(img_shape)
+        print('next embedding..', emb.shape)
+        if slice_for_fit is not None:
+            clusterer.fit(emb.view(*img_shape, -1)[slice_for_fit].contiguous().view(-1, emb.shape[-1]))
+            clusterer.generate_prediction_data()
+            labels = hdbscan.approximate_predict(clusterer, emb).reshape(img_shape)
+        else:
+            labels = clusterer.fit_predict(emb).reshape(img_shape)
         result.append(labels)
 
     result = np.stack(result, axis=0).reshape(emb_shape[:-n_img_dims - 1] + emb_shape[-n_img_dims:])
