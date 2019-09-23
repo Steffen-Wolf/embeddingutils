@@ -155,7 +155,7 @@ class SumLoss(WeightedLoss):
         split_target = isinstance(labels, (list, tuple)) if self.split_target is 'auto' else self.split_pred
         if split_target:
             # apply the list of losses to the list of predictions
-            assert len(labels) == len(self.losses)
+            assert len(labels) == len(self.losses), f'{len(labels)} != {len(self.losses)}'
             label_per_loss = labels
         else:
             label_per_loss = [labels] * len(self.losses)
@@ -197,10 +197,23 @@ class LossSegmentwiseFreeTags(WeightedLoss):
     def __init__(self, loss_weights=(1, 0.1), ignore_label=None,
                  push_distance_measure='mean_l1_norm', push_loss_func='mse', push_margin=0.25, push_weighting='vanilla',
                  pull_distance_measure='mean_l1_norm', pull_loss_func='mse', pull_margin=0.00, pull_weighting='vanilla',
-                 use_cosine_distance=False, **super_kwargs):
+                 regularization_loss=None,
+                 use_cosine_distance=False,
+                 **super_kwargs):
 
-        super_kwargs = dict(loss_weights=loss_weights, loss_names=['push-loss', 'pull-loss'], **super_kwargs)
+        if regularization_loss is None:
+            assert len(loss_weights) == 2, f'{loss_weights}'
+            super_kwargs = dict(loss_weights=loss_weights, loss_names=['push-loss', 'pull-loss'], **super_kwargs)
+        else:
+            assert len(loss_weights) == 3, f'{loss_weights}'
+            super_kwargs = dict(loss_weights=loss_weights,
+                                loss_names=['push-loss', 'embedding-regularization', 'pull-loss'],
+                                **super_kwargs)
+
         super(LossSegmentwiseFreeTags, self).__init__(**super_kwargs)
+
+        self.regularization_loss = regularization_loss
+        assert self.regularization_loss is None or callable(regularization_loss)
 
         self.ignore_label = ignore_label
         assert self.ignore_label in [None, 0], \
@@ -229,6 +242,7 @@ class LossSegmentwiseFreeTags(WeightedLoss):
         self.pull_margin = pull_margin
         self.pull_weighting = pull_weighting
         assert callable(self.pull_weighting) or self.pull_weighting in self.PULL_WEIGHTINGS
+
 
     def get_push_weights(self, segment_sizes, n_segments, n_pixels, n_active_pixels):
         if callable(self.push_weighting):
@@ -312,7 +326,7 @@ class LossSegmentwiseFreeTags(WeightedLoss):
         if len(preds.shape) == len(labels.shape):  # no intermediate predictions
             preds = preds[:, None]
 
-        pushes, pulls = [], []
+        pushes, reg_losses, pulls = [], [], []
         for gt_seg, embeddings in zip(gt_segs, preds):  # iterate over minibatch
             n_segments = torch.max(gt_seg).int().item() + 1
             gt_seg = gt_seg.long()
@@ -354,13 +368,21 @@ class LossSegmentwiseFreeTags(WeightedLoss):
             push = self.push_loss(centroids, weights=push_weights)
             pushes.append(push)
 
+            # regularization loss
+            if self.regularization_loss is not None:
+                reg_loss = self.regularization_loss(centroids)
+                reg_losses.append(reg_loss)
+
             # pull loss
             pixel_wise_centroids = centroids[:, :, gt_seg]
             pull_weights = self.get_pull_weights(**weighting_info)
             pull = self.pull_loss(embeddings, pixel_wise_centroids, weights=pull_weights)
             pulls.append(pull)
 
-        return torch.stack(pushes), torch.stack(pulls)
+        if reg_losses:
+            return torch.stack(pushes), torch.stack(pulls), torch.stack(reg_losses)
+        else:
+            return torch.stack(pushes), torch.stack(pulls)
 
 
 class LossAffinitiesFromEmbedding(WeightedLoss):
@@ -511,3 +533,8 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
             losses_per_offset.append(torch.stack(loss_this_offset, dim=0))
 
         return losses_per_offset
+
+
+class L2RegularizationLoss(torch.nn.Module):
+    def forward(self, pred, *labels):
+        return (pred ** 2).sum()
