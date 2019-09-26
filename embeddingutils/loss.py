@@ -7,6 +7,10 @@ from embeddingutils.affinities import *
 from inferno.extensions.criteria.set_similarity_measures import SorensenDiceLoss
 import inferno.utils.train_utils as tu
 import collections
+try:
+    from speedrun.log_anywhere import log_image
+except ImportError:
+    log_image = None
 
 
 class ScalarLoggingMixin:
@@ -538,3 +542,110 @@ class LossAffinitiesFromEmbedding(WeightedLoss):
 class L2RegularizationLoss(torch.nn.Module):
     def forward(self, pred, *labels):
         return (pred ** 2).sum()
+
+
+class NevenMaskLoss(WeightedLoss):
+    """
+    Generalization of loss from
+    "Instance Segmentation by Jointly Optimizing Spatial Embeddings and Clustering Bandwidth" by Neven et al.
+
+    Notes on the original code at https://github.com/davyneven/SpatialEmbeddings
+        - Model is a multi branched variant with 3 independent decoders for embeddings, sigmas, seeds.
+        - Last layer of model is initialized differently: sigmas to 0 weight, 1 bias, seeds to 0.
+        - Sigma is made positive by sigma = exp(10 * sigma). Why 10?
+        - Clustering:
+            - They only cluster all but 128 (seems arbitrary) pixels are assigned.
+
+    Ideas for generalization:
+        - Free, non-offset embeddings
+        - learned sigma -> learned, position dependent similarity measure
+            - general gaussians
+            - weights of a couple of 1x1 convolutions
+    """
+
+    def __init__(self, loss_weights=(1, 1, 1), ignore_label=None, log_masks=0,
+                 **super_kwargs):
+
+        super_kwargs = dict(loss_weights=loss_weights,
+                            loss_names=['instance-loss', 'variance-loss', 'seed-loss'],
+                            **super_kwargs)
+
+        super(NevenMaskLoss, self).__init__(**super_kwargs)
+
+        self.ignore_label = ignore_label
+        self.log_masks = log_masks
+        self.predicted_masks = None
+        self.gt_masks = None
+
+        # TODO: make variable; try DiceLoss
+        self.mask_comparison_loss = torch.nn.BCELoss(reduction='mean')
+        self.spatial_dim = 3
+
+    def get_losses(self, preds, labels):
+        embeddings, sigmas, seed_maps = preds
+        gt_segs = labels[0]
+        #n_batch, emb_dim, *spatial_shape = embeddings.shape
+        # make sure the dimensions match
+
+        # for logging purposes only
+        self.predicted_masks = []
+        self.gt_masks = []
+
+        # TODO: fix
+        # assert all([n_dims[:1] == n_dims[1:]
+        #            for i, n_dims in enumerate(zip(embeddings.shape, sigmas.shape, seed_maps.shape, gt_segs.shape))
+        #            if i != 1]), \
+        #     f"Dimensions must match except in channel: {embeddings.shape, sigmas.shape, seed_maps.shape, gt_segs.shape}"
+
+        batch_size, emb_dim = embeddings.shape[:2]
+        losses = [self.get_losses_single_sample(*inputs) for inputs in zip(embeddings, sigmas, seed_maps, gt_segs)]
+        if self.log_masks:
+            assert log_image is not None, f'need speedrun anywhere logging to log masks'
+            log_image('pred_instance_masks', torch.stack(self.predicted_masks, dim=1))
+            log_image('gt_instance_masks', torch.stack(self.gt_masks, dim=1))
+        return torch.stack(losses).mean(0)
+
+    def get_losses_single_sample(self, embedding, sigmas, seed_map, gt_seg):
+        instance_ids = gt_seg.unique()
+        instance_ids = instance_ids[instance_ids != self.ignore_label]
+        losses = [self.get_loss_single_instance(instance_id, embedding, sigmas, seed_map, gt_seg)
+                  for instance_id in instance_ids]
+        losses = torch.stack([torch.stack(loss) for loss in losses])
+
+        # regress seeds to 0 on background
+        if self.ignore_label is not None:
+            losses[-1] += ((seed_map[gt_seg == self.ignore_label]) ** 2).mean()
+        return losses.mean(0)
+
+    def predicted_instance_mask(self, embedding, target_embedding, sigma):
+        sigma = torch.exp(sigma)
+        return torch.exp(-((embedding - target_embedding[(slice(None),) + self.spatial_dim*(None,)]) ** 2).sum(0, keepdim=True) / sigma ** 2)
+
+    def get_loss_single_instance(self, instance_id, embedding, sigmas, seed_maps, gt_seg):
+        instance_mask = (gt_seg == instance_id)[0]  # (1, W, H)
+
+        # the target embedding is the mean of embedding vectors of pixels in instance
+        target_embedding = embedding[:, instance_mask].view(embedding.shape[0], -1).mean(1)  # (E)
+
+
+        # we take as sigma the mean predicted sigma over the instance
+        sigma = sigmas[:, instance_mask].view(sigmas.shape[0], -1).mean(1)
+
+        predicted_mask = self.predicted_instance_mask(embedding, target_embedding, sigma)
+        if len(self.predicted_masks) < self.log_masks:
+            self.predicted_masks.append(predicted_mask.detach()[None])  # B I D H W
+            self.gt_masks.append(instance_mask.detach()[None, None])  # B I D H W
+
+        instance_loss = self.mask_comparison_loss(predicted_mask, instance_mask.float()[None])
+
+        sigma_loss = ((sigmas[:, instance_mask] - sigma.detach().item()) ** 2).sum(0).mean()
+
+        seed_maps_loss = ((seed_maps[:, instance_mask] - predicted_mask[:, instance_mask]) ** 2).sum(0).mean()
+
+        return instance_loss, sigma_loss, seed_maps_loss
+
+
+
+
+
+
