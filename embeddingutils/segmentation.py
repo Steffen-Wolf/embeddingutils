@@ -186,7 +186,6 @@ def hdbscan_segmentation(embedding, n_img_dims=None, coord_scales=None,
     # iterate over images in batch
     result = []
     for emb in embedding:
-        print('next embedding..', emb.shape)
         if slice_for_fit is not None:
             clusterer.fit(emb.view(*img_shape, -1)[slice_for_fit].contiguous().view(-1, emb.shape[-1]))
             clusterer.generate_prediction_data()
@@ -197,6 +196,64 @@ def hdbscan_segmentation(embedding, n_img_dims=None, coord_scales=None,
 
     result = np.stack(result, axis=0).reshape(emb_shape[:-n_img_dims - 1] + emb_shape[-n_img_dims:])
     return torch.from_numpy(result)
+
+
+def gaussian_mask_growing_segmentation(embedding, seed_map, sigma_map, seed_score_threshold=0.5, min_cluster_size=1):
+    """
+    Compute a segmentation by sequentially growing masks based on a gaussian similarity.
+    :param embedding: torch.FloatTensor
+    Shape should be (E D H W) or (E H W) (embedding dimension + spatial dimensions).
+    :param seed_map: torch.FloatTensor
+    Shape should be (D H W) or (H W) (arbitrary number of spatial dimensions).
+    :param sigma_map: torch.FloatTensor
+    Shape should be (D H W) or (H W) (arbitrary number of spatial dimensions).
+    :param seed_score_threshold float
+    If no seeds with at least this score are present, clustering stops.
+    :param min_cluster_size int
+    Clulsters with a smaller number of pixels will be discarded.
+    :return: torch.LongTensor
+    the computed segmentation
+    """
+    # TODO: argmax over masks as final step
+    spatial_shape = embedding.shape[1:]
+    segmentation = torch.zeros(spatial_shape).long().to(embedding.device)
+    mask = seed_map > 0.5
+
+    if mask.sum() < min_cluster_size:  # nothing to do
+        return segmentation
+
+    masked_embedding = embedding[:, mask]
+    masked_seed_map = seed_map[mask]
+    masked_sigma_map = sigma_map[mask]
+    masked_segmentation = torch.zeros_like(masked_seed_map).long()
+    unclustered = torch.ones_like(masked_segmentation).bool()
+
+    current_id = 1
+    while unclustered.sum() >= min_cluster_size:
+        # get position of seed with highest score
+        seed = (masked_seed_map * unclustered.float()).argmax().item()
+        seed_score = masked_seed_map[seed]
+
+        if seed_score < seed_score_threshold:
+            break
+
+        center = masked_embedding[:, seed]
+        unclustered[seed] = 0  # just to make sure
+        sigma = masked_sigma_map[seed]
+        smooth_mask = torch.exp(-1 * ((((masked_embedding - center[:, None]) / sigma) ** 2).sum(0)))
+
+        proposal = smooth_mask > 0.5
+
+        if proposal.sum() > min_cluster_size:
+            if unclustered[proposal].sum().float() / proposal.sum().float() > 0.5:  # half of proposal not assigned yet
+                masked_segmentation[proposal] = current_id
+                current_id += 1
+
+        unclustered[proposal] = 0
+
+    segmentation[mask] = masked_segmentation
+
+    return segmentation
 
 
 if __name__ == '__main__':
