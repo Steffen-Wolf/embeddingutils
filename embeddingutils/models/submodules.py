@@ -6,11 +6,19 @@ import torch.nn.functional as F
 from torch.nn import init
 from torch import cat
 import numpy as np
+
 try:
     from speedrun.log_anywhere import log_image
 except ImportError:
     def log_image(tag, value):
         assert False, f'Image logging cannot be used without speedrun.'
+
+try:
+    from gpushift import MeanShift
+except ImportError:
+    class MeanShift:
+        def __init__(self, *args, **kwargs):
+            assert False, f'gpushift not found. please install from https://github.com/imagirom/gpushift.'
 
 
 class DepthToChannel(nn.Module):
@@ -324,6 +332,48 @@ class HierarchicalAffinityAveraging(torch.nn.Module):
 
             embedding = stage(affinities, embedding)
         return torch.cat([ignored, embedding], 1)
+
+
+class ContiguousBackward(torch.autograd.Function):
+    """
+    Function to ensure contiguous gradient in backward pass. To be applied after PyKeOps reduction.
+    """
+    @staticmethod
+    def forward(ctx, input):
+        return input
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output.contiguous()
+
+
+class MeanShiftLayer(MeanShift):
+    """
+    Wrapper for MeanShift that handles appropriate reshaping.
+    """
+    def forward(self, embedding):
+        in_shape = embedding.shape  # B E (D) H W
+        embedding = embedding.view(in_shape[:2] + (-1,))  # B E N
+        embedding = embedding.transpose(1, 2)  # B N E
+        embedding = super(MeanShiftLayer, self).forward(embedding)
+        embedding = ContiguousBackward().apply(embedding)
+        embedding = embedding.transpose(1, 2)  # B E N
+        embedding = embedding.view(in_shape)  # B E (D) H W
+        return embedding
+
+
+class ChannelSliceWrapper(torch.nn.Module):
+    """
+    Wrapper to apply a module only to some channels.
+    """
+    def __init__(self, module, start=0, stop=None):
+        super(ChannelSliceWrapper, self).__init__()
+        self.slice = slice(start, stop)
+        self.module = module
+
+    def forward(self, input):
+        input[:, self.slice] = self.module(input[:, self.slice])
+        return input
 
 
 if __name__ == '__main__':
