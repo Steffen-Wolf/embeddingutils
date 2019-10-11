@@ -16,19 +16,22 @@ from .lovasz_losses import StableBCELoss, lovasz_hinge
 
 class ScalarLoggingMixin:
     def __init__(self):
+        """
+        Mixin for logging scalars via the inferno trainer.
+        """
         super(ScalarLoggingMixin, self).__init__()
         self.validation_averages = dict()
         self.current_validation_iteration = None
         self.registered_states = set()
 
-    def save_scalar(self, name, value, trainer=None):
+    def save_scalar(self, name, value, trainer=None, meta_tag=None):
         if trainer is None:
             assert hasattr(self, 'trainer')
             trainer = self.trainer
         if isinstance(value, torch.Tensor):
             value = value.detach().cpu().clone()
-        # add prefix ('training' or 'validation') to name
-        name = self.add_prefix(name, trainer)
+        # add prefix ('training' or 'validation'), meta_tag if specified, to name
+        name = self.add_prefix(name, trainer, meta_tag=meta_tag)
         if name not in self.registered_states:
             self.observe_state(name, trainer)
         if trainer.model.training:  # training
@@ -53,7 +56,10 @@ class ScalarLoggingMixin:
         time = 'training' if trainer.model.training else 'validation'
         logger.observe_state(name, time)
 
-    def add_prefix(self, name, trainer):
+    def add_prefix(self, name, trainer, meta_tag=None):
+        if meta_tag is not None or (hasattr(self, 'meta_tag') and self.meta_tag is not None):
+            meta_tag = meta_tag if meta_tag is not None else self.meta_tag
+            name = meta_tag + '/' + name
         if trainer.model.training:
             return 'training_' + name
         else:
@@ -62,9 +68,10 @@ class ScalarLoggingMixin:
 
 class WeightedLoss(ScalarLoggingMixin, torch.nn.Module):
 
-    def __init__(self, loss_weights=None, trainer=None, loss_names=None):
+    def __init__(self, loss_weights=None, trainer=None, loss_names=None, meta_tag=None):
         super(WeightedLoss, self).__init__()
         self.loss_weights = loss_weights
+        self.meta_tag = type(self).__name__ if meta_tag is None else meta_tag
         if isinstance(loss_weights, collections.Sized) and not isinstance(loss_weights, str):
             self.n_losses = len(loss_weights)
             self.enable_logging = True
@@ -88,7 +95,9 @@ class WeightedLoss(ScalarLoggingMixin, torch.nn.Module):
             loss = loss + weight * current
 
         self.save_losses(losses)
-        return loss.mean()
+        total_loss = loss.mean()
+        self.save_scalar('_total', total_loss.detach())
+        return total_loss
 
     def save_losses(self, losses):
         if self.trainer is None:
@@ -106,9 +115,9 @@ class WeightedLoss(ScalarLoggingMixin, torch.nn.Module):
 
 class SumLoss(WeightedLoss):
     GRAD_PREFIX = {
-        'norm': 'grad-norm_',
-        'max': 'grad-max_',
-        'mean': 'grad-mean_',
+        'norm': 'norm',
+        'max': 'max',
+        'mean': 'mean',
     }
 
     def __init__(self, losses, ignore_weight_zero=True, grad_stats=None, loss_weights=None, loss_names=None,
@@ -135,7 +144,7 @@ class SumLoss(WeightedLoss):
         # divide by loss weights to get unweighted grad norms that are comparable for different weights
         values = [value / w for value, w in zip(values, self.loss_weights)]
         for name, value in zip(self.loss_names, values):
-            self.save_scalar(self.GRAD_PREFIX[stat_name] + name, value)
+            self.save_scalar(name + '_' + self.GRAD_PREFIX[stat_name], value, meta_tag=self.meta_tag + '_gradient')
 
     def hook(self, grad):
         grad = grad.detach()
@@ -568,7 +577,7 @@ class NevenMaskLoss(WeightedLoss):
         'Dice': SorensenDiceLoss(channelwise=True),
         'LovaszHinge': lambda pred, label: lovasz_hinge(2 * pred - 1, label, per_image=True),
     }
-    def __init__(self, loss_weights=(1, 1, 1), ignore_label=None, log_masks=0, binary_loss='BCE',
+    def __init__(self, loss_weights=(1, 1, 1), ignore_label=None, log_masks=0, binary_loss='BCE', spatial_dim=3,
                  **super_kwargs):
 
         super_kwargs = dict(loss_weights=loss_weights,
@@ -583,7 +592,7 @@ class NevenMaskLoss(WeightedLoss):
         self.log_masks = log_masks
         self.predicted_masks = None
         self.gt_masks = None
-        self.spatial_dim = 3
+        self.spatial_dim = spatial_dim
 
     def get_losses(self, preds, labels):
         embeddings, sigmas, seed_maps = preds
